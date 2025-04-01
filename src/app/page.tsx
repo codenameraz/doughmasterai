@@ -249,19 +249,6 @@ export default function Home() {
           </div>
         </div>
       </section>
-
-      {/* Newsletter Section */}
-      <section className="py-6 md:py-8 bg-gradient-to-b from-muted/50 to-background">
-        <div className="container px-4 sm:px-6 mx-auto">
-          <div className="max-w-md mx-auto text-center">
-            <h2 className="text-xl font-bold mb-1">Join the DoughMaster Community</h2>
-            <p className="text-sm text-foreground/80 mb-3">
-              Subscribe for weekly pizza tips, new recipes, and seasonal specials.
-            </p>
-            <NewsletterSubscribe />
-          </div>
-        </div>
-      </section>
     </div>
   )
 }

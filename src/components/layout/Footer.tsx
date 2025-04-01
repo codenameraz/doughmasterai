@@ -13,64 +13,12 @@ export function Footer() {
       ></div>
       
       <div className="container py-12 md:py-16 relative">
-        <div className="grid grid-cols-1 gap-8 md:grid-cols-12">
+        <div className="grid grid-cols-1 gap-8 md:grid-cols-8">
           <div className="md:col-span-4">
             <Logo size="lg" />
             <p className="mt-4 text-sm text-muted-foreground max-w-xs">
               Craft exceptional pizza dough with our precision calculator. Authentic recipes customized to your style, schedule, and kitchen environment.
             </p>
-          </div>
-          
-          <div className="md:col-span-2">
-            <h4 className="font-serif text-base font-bold mb-4">Navigate</h4>
-            <ul className="space-y-3">
-              <li>
-                <Link href="/" className="text-sm text-muted-foreground hover:text-primary transition-warm">
-                  Home
-                </Link>
-              </li>
-              <li>
-                <Link href="/calculator" className="text-sm text-muted-foreground hover:text-primary transition-warm">
-                  Calculator
-                </Link>
-              </li>
-              <li>
-                <Link href="/recipes" className="text-sm text-muted-foreground hover:text-primary transition-warm">
-                  Recipes
-                </Link>
-              </li>
-              <li>
-                <Link href="/guide" className="text-sm text-muted-foreground hover:text-primary transition-warm">
-                  Guide
-                </Link>
-              </li>
-            </ul>
-          </div>
-          
-          <div className="md:col-span-2">
-            <h4 className="font-serif text-base font-bold mb-4">Pizza Styles</h4>
-            <ul className="space-y-3">
-              <li>
-                <Link href="/styles/neapolitan" className="text-sm text-muted-foreground hover:text-primary transition-warm">
-                  Neapolitan
-                </Link>
-              </li>
-              <li>
-                <Link href="/styles/new-york" className="text-sm text-muted-foreground hover:text-primary transition-warm">
-                  New York
-                </Link>
-              </li>
-              <li>
-                <Link href="/styles/detroit" className="text-sm text-muted-foreground hover:text-primary transition-warm">
-                  Detroit
-                </Link>
-              </li>
-              <li>
-                <Link href="/styles/sicilian" className="text-sm text-muted-foreground hover:text-primary transition-warm">
-                  Sicilian
-                </Link>
-              </li>
-            </ul>
           </div>
           
           <div className="md:col-span-4">
@@ -89,9 +37,6 @@ export function Footer() {
             &copy; 2024 DoughMaster.ai. Crafted with passion for pizza artisans.
           </p>
           <div className="flex gap-6">
-            <Link href="/terms" className="text-xs text-muted-foreground hover:text-primary transition-warm">
-              Terms
-            </Link>
             <Link href="/privacy" className="text-xs text-muted-foreground hover:text-primary transition-warm">
               Privacy
             </Link>

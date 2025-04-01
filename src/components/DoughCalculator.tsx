@@ -22,7 +22,12 @@ import { Calendar } from "@/components/ui/calendar"
 import { format } from "date-fns"
 import { Calendar as CalendarIcon } from "lucide-react"
 import { NewsletterSubscribe } from "@/components/NewsletterSubscribe";
-// cn import removed as it's no longer needed after removing conditional styling test
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+import { motion } from "framer-motion";
 
 // --- Interfaces ---
 interface YeastInfo { type: "fresh" | "active dry" | "instant"; percentage: number; }
@@ -105,6 +110,15 @@ interface ApiPayload {
         explainRationale: boolean;
         avoidGenericResponses: boolean;
         requireSpecificAnalysis: boolean;
+        includeAutolyse: boolean;
+        skipAutolyse: boolean;
+        processSteps: {
+            autolyse: boolean;
+            initialMix: boolean;
+            bulkFermentation: boolean;
+            divideAndBall: boolean;
+            finalProof: boolean;
+        };
     };
 }
 
@@ -242,6 +256,22 @@ const FERMENTATION_SCHEDULES: Record<FermentationType, FermentationScheduleConfi
     }
 };
 
+// Add this near other interfaces
+interface LoadingStep {
+  icon: React.ReactNode;
+  text: string;
+}
+
+// Add this near other constants
+const LOADING_STEPS: LoadingStep[] = [
+  { icon: <Wheat className="h-4 w-4" />, text: "Measuring flour..." },
+  { icon: <Droplet className="h-4 w-4" />, text: "Adding water..." },
+  { icon: <CircleDot className="h-4 w-4" />, text: "Sprinkling salt..." },
+  { icon: <ChefHat className="h-4 w-4" />, text: "Mixing ingredients..." },
+  { icon: <Scale className="h-4 w-4" />, text: "Calculating ratios..." },
+  { icon: <Clock className="h-4 w-4" />, text: "Planning schedule..." },
+];
+
 // --- End Constants ---
 
 // Add helper functions at the top level
@@ -267,7 +297,7 @@ interface TimelineStep {
 // Add a helper function at the top level to safely render impact lists
 const renderImpactList = (impacts: string[] | undefined | null) => {
   if (!Array.isArray(impacts) || impacts.length === 0) {
-    return <p className="text-muted-foreground flex items-start gap-2">Analysis pending</p>;
+    return null;
   }
   return impacts.map((impact: string, index: number) => (
     <p key={index} className="text-muted-foreground flex items-start gap-2">
@@ -275,6 +305,27 @@ const renderImpactList = (impacts: string[] | undefined | null) => {
       {impact}
     </p>
   ));
+};
+
+// Add this helper function near the top of the file with other helper functions
+const calculateTimeGap = (currentTime: string, nextTime: string): string | null => {
+  try {
+    // Parse the time strings into hours
+    const current = parseFloat(currentTime.split(' ')[0]);
+    const next = parseFloat(nextTime.split(' ')[0]);
+    
+    if (isNaN(current) || isNaN(next)) return null;
+    
+    const diff = next - current;
+    if (diff <= 0) return null;
+    
+    if (diff < 1) {
+      return `${Math.round(diff * 60)} minutes`;
+    }
+    return diff === 1 ? '1 hour' : `${diff} hours`;
+  } catch {
+    return null;
+  }
 };
 
 export function DoughCalculator() {
@@ -312,6 +363,15 @@ export function DoughCalculator() {
   // Add state for technical analysis visibility
   const [showTechnicalAnalysis, setShowTechnicalAnalysis] = useState(false);
 
+  // Add to state section near the top of the component:
+  const [autolyse, setAutolyse] = useState(false);
+
+  // Add this inside the DoughCalculator component, near other state
+  const [loadingStep, setLoadingStep] = useState(0);
+
+  // Add new state for tracking changes
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
   // --- End State ---
 
   // --- Effects ---
@@ -342,7 +402,41 @@ export function DoughCalculator() {
     setRecipeResult(null);
     setError(null);
   }, [doughBalls, weightPerBall, altitude, hydration, salt, oil, primaryFlourType, addSecondaryFlour, secondaryFlourType, primaryFlourPercentage]);
-  // --- End Effects ---
+
+  // Add this inside the DoughCalculator component, near other effects
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isLoading) {
+      interval = setInterval(() => {
+        setLoadingStep((prev) => (prev + 1) % LOADING_STEPS.length);
+      }, 1500);
+    } else {
+      setLoadingStep(0);
+    }
+    return () => clearInterval(interval);
+  }, [isLoading]);
+
+  // Add this effect to track changes
+  useEffect(() => {
+    if (recipeResult) {
+      setHasUnsavedChanges(true);
+    }
+  }, [
+    doughBalls,
+    weightPerBall,
+    hydration,
+    salt,
+    oil,
+    selectedStyle,
+    fermentationTime,
+    targetDate,
+    altitude,
+    autolyse,
+    primaryFlourType,
+    secondaryFlourType,
+    primaryFlourPercentage,
+    addSecondaryFlour
+  ]);
 
   // --- Memos ---
   const flourMixInput = useMemo((): FlourMix | null => {
@@ -399,13 +493,14 @@ export function DoughCalculator() {
     }
 
     if (fermentationTime === 'custom' && !targetDate) {
-        setError("Please select a target date for custom schedule.");
-        return;
+      setError("Please select a target date for custom schedule.");
+      return;
     }
 
     setIsLoading(true);
     setError(null);
     setRecipeResult(null);
+    setHasUnsavedChanges(false);
 
     // Round values to ensure consistency
     const roundedHydration = roundToDecimal(hydration);
@@ -416,110 +511,29 @@ export function DoughCalculator() {
     
     // Calculate fermentation schedule based on target date for custom schedules
     if (fermentationTime === 'custom' && targetDate) {
-        const now = new Date();
-        const totalHours = Math.ceil((targetDate.getTime() - now.getTime()) / (1000 * 60 * 60));
-        
-        if (totalHours < 4) {
-            setError("Custom schedule requires at least 4 hours of fermentation time.");
-            setIsLoading(false);
-            return;
-        }
-
-        // Determine if we should use cold fermentation based on total time
-        const useColdFerment = totalHours > 12;
-        const roomTempHours = useColdFerment ? 2 : totalHours; // Always use 2 hours room temp for cold ferment
-        const coldHours = useColdFerment ? totalHours - 2 : 0; // Remaining time goes to cold ferment
-
-        fermentationDetails.duration = {
-            min: totalHours,
-            max: totalHours
-        };
-
-        fermentationDetails.temperature = {
-            room: useColdFerment ? 75 : 72, // Slightly lower temp for longer room ferments
-            cold: useColdFerment ? 38 : null
-        };
-
-        // Update the payload's fermentation details
-        const payload: ApiPayload = {
-            doughBalls: numDoughBalls,
-            weightPerBall: numWeightPerBall,
-            style: selectedStyle,
-            recipe: {
-                hydration: roundedHydration,
-                salt: roundedSalt,
-                oil: roundedOil,
-                flourMix: isCustomStyle && addSecondaryFlour ? {
-                    primaryType: primaryFlourType,
-                    secondaryType: secondaryFlourType,
-                    primaryPercentage: primaryFlourPercentage
-                } : null,
-                fermentationTime: fermentationTime,
-                yeast: {
-                    type: defaultYeastType
-                }
-            },
-            fermentation: {
-                schedule: fermentationTime,
-                temperature: fermentationDetails.temperature,
-                duration: {
-                    min: roomTempHours,
-                    max: totalHours
-                }
-            },
-            ...(altitude ? { environment: { altitude: parseInt(altitude) } } : {}),
-            analysisPreferences: {
-                detailedAnalysis: true,
-                explainRationale: true,
-                avoidGenericResponses: true,
-                requireSpecificAnalysis: true,
-            }
-        };
-
-        try {
-            console.log('Sending request to API with payload:', JSON.stringify(payload, null, 2));
-            
-            const response = await fetch('/api/recipe-adjust', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) {
-                console.error(`API Error: ${response.status} ${response.statusText}`);
-                const errorData = await response.json().catch(() => ({ message: response.statusText }));
-                throw new Error(errorData.message || `API Error: ${response.status}`);
-            }
-
-            const result = await response.json();
-            console.log('API response received:', result);
-            
-            if (typeof result.hydration === 'number') {
-                setHydration(roundToDecimal(result.hydration));
-            }
-            
-            if (typeof result.salt === 'number') {
-                setSalt(roundToDecimal(result.salt));
-            }
-            
-            if (typeof result.oil === 'number') {
-                setOil(roundToDecimal(result.oil));
-            } else if (result.oil === null) {
-                setOil(0);
-            }
-            
-            setRecipeResult(result);
-
-        } catch (err: any) {
-            console.error("Calculation error:", err);
-            setError(err.message || 'An unexpected error occurred.');
-        } finally {
-            setIsLoading(false);
-        }
+      const now = new Date();
+      const totalHours = Math.ceil((targetDate.getTime() - now.getTime()) / (1000 * 60 * 60));
+      
+      if (totalHours < 4) {
+        setError("Custom schedule requires at least 4 hours of fermentation time.");
+        setIsLoading(false);
         return;
+      }
+
+      // Determine if we should use cold fermentation based on total time
+      const useColdFerment = totalHours > 12;
+      const roomTempHours = useColdFerment ? 2 : totalHours; // Always use 2 hours room temp for cold ferment
+      const coldHours = useColdFerment ? totalHours - 2 : 0; // Remaining time goes to cold ferment
+
+      fermentationDetails.duration = {
+        min: totalHours,
+        max: totalHours
+      };
+
+      fermentationDetails.temperature = {
+        room: useColdFerment ? 75 : 72, // Slightly lower temp for longer room ferments
+        cold: useColdFerment ? 38 : null
+      };
     }
 
     const payload: ApiPayload = {
@@ -551,49 +565,49 @@ export function DoughCalculator() {
         explainRationale: true,
         avoidGenericResponses: true,
         requireSpecificAnalysis: true,
+        includeAutolyse: autolyse,
+        skipAutolyse: !autolyse,
+        processSteps: {
+          autolyse: autolyse,
+          initialMix: true,
+          bulkFermentation: true,
+          divideAndBall: true,
+          finalProof: true
+        }
       }
     };
 
     try {
-        console.log('Sending request to API with payload:', JSON.stringify(payload, null, 2));
-        
+      console.log('Sending request to API with payload:', JSON.stringify(payload, null, 2));
+      
       const response = await fetch('/api/recipe-adjust', {
         method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify(payload)
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
-            console.error(`API Error: ${response.status} ${response.statusText}`);
-            const errorData = await response.json().catch(() => ({ message: response.statusText }));
-            throw new Error(errorData.message || `API Error: ${response.status}`);
-        }
+        const errorData = await response.json().catch(() => ({ error: response.statusText }));
+        throw new Error(errorData.error || `API Error: ${response.status} - ${response.statusText}`);
+      }
 
-        const result = await response.json();
-        console.log('API response received:', result);
-        
-        if (typeof result.hydration === 'number') {
-            setHydration(roundToDecimal(result.hydration));
-        }
-        
-        if (typeof result.salt === 'number') {
-            setSalt(roundToDecimal(result.salt));
-        }
-        
-        if (typeof result.oil === 'number') {
-            setOil(roundToDecimal(result.oil));
-        } else if (result.oil === null) {
-            setOil(0);
-        }
-        
+      const result = await response.json();
+      console.log('API response received:', result);
+      
+      // Update state with the received values
+      if (result.hydration) setHydration(roundToDecimal(result.hydration));
+      if (result.salt) setSalt(roundToDecimal(result.salt));
+      if (result.oil !== undefined) setOil(result.oil === null ? 0 : roundToDecimal(result.oil));
+      
+      // Don't set any fallback values, just use what the API returns
       setRecipeResult(result);
 
     } catch (err: any) {
       console.error("Calculation error:", err);
-      setError(err.message || 'An unexpected error occurred.');
+      setError(err.message || 'Failed to calculate recipe. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -650,166 +664,176 @@ export function DoughCalculator() {
 
   return (
     <div className="container mx-auto px-4 py-8">
-      <div className="max-w-4xl mx-auto">
-        <Card>
+      <div className="max-w-4xl mx-auto space-y-6">
+        <Card className="relative z-50">
           <CardHeader className="text-center pb-4">
             <CardTitle className="text-2xl sm:text-3xl">Pizza Dough Calculator</CardTitle>
             <CardDescription>Create your perfect pizza dough recipe</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="relative">
-              <form onSubmit={handleCalculate} className="space-y-6">
-                {/* Main Configuration Grid */}
+            <form onSubmit={handleCalculate} className="space-y-8">
+              {/* Main Configuration */}
+              <div className="space-y-8">
+                {/* Style and Fermentation */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Style Selection */}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Pizza Style</Label>
+                    <Select 
+                      value={selectedStyle} 
+                      onValueChange={(v) => setSelectedStyle(v as PizzaStyleValue)} 
+                      required
+                    >
+                      <SelectTrigger className="relative bg-background h-10">
+                        <SelectValue placeholder="Select pizza style" />
+                      </SelectTrigger>
+                      <SelectContent sideOffset={4} className="z-[60]">
+                        {PIZZA_STYLE_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Fermentation Selection */}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Fermentation Schedule</Label>
+                    <Select 
+                      value={fermentationTime} 
+                      onValueChange={(v) => setFermentationTime(v as FermentationType)}
+                    >
+                      <SelectTrigger className="relative bg-background h-10">
+                        <SelectValue placeholder="Select fermentation time" />
+                      </SelectTrigger>
+                      <SelectContent sideOffset={4} className="z-[60]">
+                        {FERMENTATION_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {/* Custom Schedule UI */}
+                {fermentationTime === 'custom' && (
+                  <Card className="bg-muted/30">
+                    <CardContent className="pt-4">
+                      <div className="space-y-4">
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button
+                              variant={"outline"}
+                              className={cn(
+                                "w-full justify-start text-left font-normal relative bg-background",
+                                !targetDate && "text-muted-foreground"
+                              )}
+                            >
+                              <CalendarIcon className="mr-2 h-4 w-4" />
+                              {targetDate ? (
+                                format(targetDate, "PPP 'at' h:mm a")
+                              ) : (
+                                <span>Select target date & time</span>
+                              )}
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0 z-[100]" align="start">
+                            <div className="p-4 space-y-4">
+                              <Calendar
+                                mode="single"
+                                selected={targetDate}
+                                onSelect={(date) => {
+                                  if (date) {
+                                    const newDate = new Date(date);
+                                    if (targetDate) {
+                                      newDate.setHours(targetDate.getHours());
+                                      newDate.setMinutes(targetDate.getMinutes());
+                                    } else {
+                                      newDate.setHours(12);
+                                      newDate.setMinutes(0);
+                                    }
+                                    setTargetDate(newDate);
+                                  }
+                                }}
+                                initialFocus
+                              />
+                              <div className="border-t pt-4">
+                                <Label>Time</Label>
+                                <Input
+                                  type="time"
+                                  value={targetDate ? format(targetDate, "HH:mm") : "12:00"}
+                                  onChange={(e) => {
+                                    const [hours, minutes] = e.target.value.split(':').map(Number);
+                                    const newDate = new Date(targetDate || new Date());
+                                    newDate.setHours(hours);
+                                    newDate.setMinutes(minutes);
+                                    setTargetDate(newDate);
+                                  }}
+                                  className="mt-2"
+                                />
+                              </div>
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                        <p className="text-sm text-muted-foreground">
+                          Select when you want your dough to be ready. We'll calculate the optimal schedule.
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Basic Measurements */}
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Dough Balls</Label>
+                    <Input 
+                      type="number" 
+                      placeholder="4" 
+                      min="1"
+                      max="100"
+                      required 
+                      value={doughBalls} 
+                      onChange={handleDoughBallsChange}
+                      className="relative bg-background h-10"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Weight/Ball (g)</Label>
+                    <Input 
+                      type="number" 
+                      placeholder="280" 
+                      min="100"
+                      max="1000"
+                      required 
+                      value={weightPerBall} 
+                      onChange={handleWeightPerBallChange}
+                      className="relative bg-background h-10"
+                    />
+                  </div>
+                </div>
+
+                {/* Ingredient Controls */}
                 <div className="space-y-6">
-                  {/* Top Row - Style and Measurements */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {/* Style Selection */}
-                    <div className="space-y-2">
-                      <Label>Pizza Style</Label>
-                      <Select value={selectedStyle} onValueChange={(v) => setSelectedStyle(v as PizzaStyleValue)} required>
-                        <SelectTrigger className="bg-background relative z-20">
-                          <SelectValue placeholder="Select pizza style" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {PIZZA_STYLE_OPTIONS.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* Fermentation Selection */}
-                    <div className="space-y-2">
-                      <Label>Fermentation Schedule</Label>
-                      <Select value={fermentationTime} onValueChange={(v) => setFermentationTime(v as FermentationType)}>
-                        <SelectTrigger className="bg-background relative z-20">
-                          <SelectValue placeholder="Select fermentation time" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {FERMENTATION_OPTIONS.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  {/* Basic Measurements */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="space-y-2 col-span-1">
-                      <Label htmlFor="doughBalls">Dough Balls</Label>
-                      <Input 
-                        id="doughBalls" 
-                        type="number" 
-                        placeholder="4" 
-                        min="1"
-                        max="100"
-                        required 
-                        value={doughBalls} 
-                        onChange={handleDoughBallsChange}
-                        className="bg-background relative z-20"
-                      />
-                    </div>
-                    <div className="space-y-2 col-span-1">
-                      <Label htmlFor="weightPerBall">Weight/Ball (g)</Label>
-                      <Input 
-                        id="weightPerBall" 
-                        type="number" 
-                        placeholder="280" 
-                        min="100"
-                        max="1000"
-                        required 
-                        value={weightPerBall} 
-                        onChange={handleWeightPerBallChange}
-                        className="bg-background relative z-20"
-                      />
-                    </div>
-                    <div className="space-y-2 col-span-2">
-                      <Label htmlFor="altitude">Altitude (ft) <span className="text-xs text-muted-foreground">(Optional)</span></Label>
-                      <Input 
-                        id="altitude" 
-                        type="number" 
-                        placeholder="e.g., 5280" 
-                        min="0" 
-                        value={altitude} 
-                        onChange={(e) => setAltitude(e.target.value)}
-                        className="bg-background relative z-20"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Ingredient Percentages - Full Width */}
-                  <div className="space-y-6">
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <Label className="flex items-center">
-                          <Droplet className="h-4 w-4 mr-1.5" />
-                          <span>Hydration</span>
-                        </Label>
-                        <span className="text-sm font-medium">{hydration.toFixed(1)}%</span>
-                      </div>
-                      <Slider 
-                        value={[hydration]} 
-                        onValueChange={handleHydrationChange} 
-                        min={50} 
-                        max={100} 
-                        step={0.5}
-                        className="w-full"
-                      />
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <Label className="flex items-center">
-                          <Percent className="h-4 w-4 mr-1.5" />
-                          <span>Salt</span>
-                        </Label>
-                        <span className="text-sm font-medium">{salt.toFixed(1)}%</span>
-                      </div>
-                      <Slider 
-                        value={[salt]} 
-                        onValueChange={handleSaltChange} 
-                        min={0} 
-                        max={5} 
-                        step={0.1}
-                        className="w-full"
-                      />
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <Label className="flex items-center">
-                          <Utensils className="h-4 w-4 mr-1.5" />
-                          <span>Oil</span>
-                        </Label>
-                        <span className="text-sm font-medium">{oil > 0 ? `${oil.toFixed(1)}%` : 'None'}</span>
-                      </div>
-                      <Slider 
-                        value={[oil]} 
-                        onValueChange={handleOilChange} 
-                        min={0} 
-                        max={15} 
-                        step={0.5}
-                        className="w-full"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Custom Flour Section - Only show if custom style selected */}
+                  {/* Custom Flour Section */}
                   {isCustomStyle && (
-                    <div className="bg-muted/30 rounded-lg overflow-hidden relative z-20">
-                      <div className="px-6 py-3 border-b bg-muted/50">
-                        <h3 className="text-sm font-medium">Custom Flour Mix</h3>
-                      </div>
-                      <div className="p-6 space-y-4">
-                        <Select value={primaryFlourType} onValueChange={(v) => setPrimaryFlourType(v as FlourType)}>
-                          <SelectTrigger className="bg-background">
-                            <SelectValue placeholder="Select primary flour" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {FLOUR_TYPES.map((flour) => (
-                              <SelectItem key={flour} value={flour}>{flour}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                    <Card className="bg-muted/30">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-base">Custom Flour Mix</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="space-y-2">
+                          <Label>Primary Flour</Label>
+                          <Select value={primaryFlourType} onValueChange={(v) => setPrimaryFlourType(v as FlourType)}>
+                            <SelectTrigger className="relative bg-background">
+                              <SelectValue placeholder="Select primary flour" />
+                            </SelectTrigger>
+                            <SelectContent sideOffset={4} className="z-[60]">
+                              {FLOUR_TYPES.map((flour) => (
+                                <SelectItem key={flour} value={flour}>{flour}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
 
                         <div className="flex items-center gap-2">
                           <Switch
@@ -821,19 +845,23 @@ export function DoughCalculator() {
 
                         {addSecondaryFlour && (
                           <div className="space-y-4">
-                            <Select value={secondaryFlourType} onValueChange={(v) => setSecondaryFlourType(v as FlourType)}>
-                              <SelectTrigger className="bg-background">
-                                <SelectValue placeholder="Select secondary flour" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {FLOUR_TYPES.map((flour) => (
-                                  <SelectItem key={flour} value={flour}>{flour}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
                             <div className="space-y-2">
+                              <Label>Secondary Flour</Label>
+                              <Select value={secondaryFlourType} onValueChange={(v) => setSecondaryFlourType(v as FlourType)}>
+                                <SelectTrigger className="relative bg-background">
+                                  <SelectValue placeholder="Select secondary flour" />
+                                </SelectTrigger>
+                                <SelectContent sideOffset={4} className="z-[60]">
+                                  {FLOUR_TYPES.map((flour) => (
+                                    <SelectItem key={flour} value={flour}>{flour}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            <div className="space-y-4">
                               <div className="flex justify-between text-sm">
-                                <span>{primaryFlourType}</span>
+                                <span className="font-medium">{primaryFlourType}</span>
                                 <span>{primaryFlourPercentage}%</span>
                               </div>
                               <Slider
@@ -842,7 +870,7 @@ export function DoughCalculator() {
                                 min={0}
                                 max={100}
                                 step={5}
-                                className="relative z-20"
+                                className="relative"
                               />
                               <div className="flex justify-between text-sm text-muted-foreground">
                                 <span>{secondaryFlourType}</span>
@@ -851,26 +879,169 @@ export function DoughCalculator() {
                             </div>
                           </div>
                         )}
-                      </div>
-                    </div>
+                      </CardContent>
+                    </Card>
                   )}
-                </div>
 
-                {/* Calculate Button */}
-                <div className="relative z-30">
-                  <Button type="submit" size="lg" className="w-full bg-primary hover:bg-primary/90" disabled={isLoading}>
-                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    {isLoading ? 'Analyzing Recipe...' : 'Calculate Recipe'}
-                  </Button>
+                  {/* Advanced Options */}
+                  <Collapsible>
+                    <Card className="bg-muted/30">
+                      <CardHeader className="pb-2 px-4">
+                        <CollapsibleTrigger className="flex items-center justify-between w-full text-left -ml-1">
+                          <div className="space-y-1">
+                            <CardTitle className="text-base">Advanced Options</CardTitle>
+                            <CardDescription>Fine-tune your dough making process</CardDescription>
+                          </div>
+                          <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform duration-200" />
+                        </CollapsibleTrigger>
+                      </CardHeader>
+                      <CollapsibleContent>
+                        <CardContent className="pt-2 px-4 space-y-6">
+                          <div className="flex items-center gap-2">
+                            <Switch
+                              checked={autolyse}
+                              onCheckedChange={setAutolyse}
+                              id="autolyse"
+                            />
+                            <div className="space-y-0.5">
+                              <Label htmlFor="autolyse" className="text-sm font-medium">Autolyse</Label>
+                              <p className="text-sm text-muted-foreground">Pre-mix flour and water for better gluten development</p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2 pt-2 border-t">
+                            <Label className="text-sm font-medium">Altitude Adjustment</Label>
+                            <div className="flex gap-2 items-center">
+                              <Input 
+                                type="number" 
+                                placeholder="0" 
+                                value={altitude} 
+                                onChange={(e) => setAltitude(e.target.value)}
+                                className="relative bg-background h-10"
+                              />
+                              <span className="text-sm text-muted-foreground">meters</span>
+                            </div>
+                            <p className="text-sm text-muted-foreground">Adjusts recipe for high-altitude baking</p>
+                          </div>
+                        </CardContent>
+                      </CollapsibleContent>
+                    </Card>
+                  </Collapsible>
+
+                  {/* Core Ingredient Sliders */}
+                  <div className="grid gap-6 pt-2">
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-sm font-medium">Hydration</Label>
+                        <span className="text-sm font-medium">{hydration}%</span>
+                      </div>
+                      <Slider
+                        value={[hydration]}
+                        onValueChange={handleHydrationChange}
+                        min={50}
+                        max={85}
+                        step={0.5}
+                        className="relative"
+                      />
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-sm font-medium">Salt</Label>
+                        <span className="text-sm font-medium">{salt}%</span>
+                      </div>
+                      <Slider
+                        value={[salt]}
+                        onValueChange={handleSaltChange}
+                        min={1.5}
+                        max={3.5}
+                        step={0.1}
+                        className="relative"
+                      />
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-sm font-medium">Oil</Label>
+                        <span className="text-sm font-medium">{oil}%</span>
+                      </div>
+                      <Slider
+                        value={[oil]}
+                        onValueChange={handleOilChange}
+                        min={0}
+                        max={8}
+                        step={0.5}
+                        className="relative"
+                      />
+                    </div>
+                  </div>
                 </div>
-              </form>
-            </div>
+              </div>
+
+              {/* Calculate Button */}
+              <Button 
+                type="submit" 
+                size="lg" 
+                className={cn(
+                  "w-full relative overflow-hidden",
+                  hasUnsavedChanges 
+                    ? "bg-primary/90 hover:bg-primary" 
+                    : recipeResult 
+                      ? "bg-primary/60 hover:bg-primary/70"
+                      : "bg-primary hover:bg-primary/90",
+                  isLoading && "cursor-not-allowed"
+                )}
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <motion.div 
+                    className="flex items-center justify-center gap-3"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <motion.div
+                      className="flex items-center gap-2"
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -20 }}
+                      key={loadingStep}
+                      transition={{ duration: 0.3 }}
+                    >
+                      <motion.div
+                        animate={{ rotate: [0, 360] }}
+                        transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                      >
+                        {LOADING_STEPS[loadingStep].icon}
+                      </motion.div>
+                      <span>{LOADING_STEPS[loadingStep].text}</span>
+                    </motion.div>
+                  </motion.div>
+                ) : (
+                  <motion.div 
+                    className="flex items-center justify-center gap-2"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    <ChefHat className="h-5 w-5" />
+                    <span>
+                      {hasUnsavedChanges 
+                        ? "Recalculate Recipe" 
+                        : recipeResult 
+                          ? "Recipe Calculated"
+                          : "Calculate Recipe"}
+                    </span>
+                  </motion.div>
+                )}
+              </Button>
+            </form>
           </CardContent>
         </Card>
 
         {/* Error Display */}
         {error && (
-          <Alert variant="destructive">
+          <Alert variant="destructive" className="mt-4">
             <AlertCircle className="h-4 w-4" />
             <AlertTitle>Error</AlertTitle>
             <AlertDescription>{error}</AlertDescription>
@@ -947,7 +1118,7 @@ export function DoughCalculator() {
                             <div className="grid grid-cols-2 gap-4 pt-4">
                               <div className="p-3 bg-muted rounded-lg">
                                 <p className="text-sm text-muted-foreground">Total Time</p>
-                                <p className="font-semibold">{recipeResult.detailedAnalysis.fermentationAnalysis.totalTime} hours</p>
+                                <p className="font-semibold">{recipeResult.detailedAnalysis.fermentationAnalysis.totalTime} </p>
                               </div>
                               <div className="p-3 bg-muted rounded-lg">
                                 <p className="text-sm text-muted-foreground">Hydration</p>
@@ -964,32 +1135,93 @@ export function DoughCalculator() {
 
               {/* Timeline Card */}
               <Card>
-                <CardHeader>
-                  <CardTitle>Process Timeline</CardTitle>
-                  <CardDescription>Step-by-step instructions</CardDescription>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <CardTitle className="flex items-center gap-2">
+                        <Clock className="h-5 w-5 text-primary" />
+                        Process Timeline
+                      </CardTitle>
+                      <CardDescription className="text-base">
+                        Total time: {recipeResult.detailedAnalysis.fermentationAnalysis.totalTime}
+                      </CardDescription>
+                    </div>
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-4">
-                    {recipeResult.timeline.map((step, index) => (
-                      <div key={index} className="relative pl-6 pb-4 border-l-2 border-muted last:border-l-0">
-                        <div className="absolute left-0 top-0 -translate-x-1/2 w-3 h-3 rounded-full bg-primary"></div>
-                        <h4 className="font-medium">{step.step}</h4>
-                        <p className="text-sm text-muted-foreground mt-1">{step.description}</p>
-                        {step.temperature && (
-                          <p className="text-sm text-muted-foreground mt-1">Temperature: {step.temperature}°F</p>
-                        )}
-                        {step.tips && step.tips.length > 0 && (
-                          <div className="mt-2 space-y-1">
-                            {step.tips.map((tip, tipIndex) => (
-                              <p key={tipIndex} className="text-sm text-muted-foreground flex items-start gap-2">
-                                <span className="text-primary">•</span>
-                                {tip}
+                  <div className="relative space-y-6">
+                    {recipeResult.timeline
+                      .filter(step => autolyse || !step.step.toLowerCase().includes('autolyse'))
+                      .map((step, index, filteredSteps) => {
+                      const nextStep = filteredSteps[index + 1];
+                      const timeGap = nextStep ? calculateTimeGap(step.time, nextStep.time) : null;
+                      const showTemp = step.temperature && 
+                        !step.step.toLowerCase().includes('mix') && 
+                        !step.step.toLowerCase().includes('knead');
+                      
+                      return (
+                        <div key={index} className="relative">
+                          {/* Timeline connector line */}
+                          {index < filteredSteps.length - 1 && (
+                            <div className="absolute left-[11px] top-[30px] w-0.5 h-[calc(100%+24px)] bg-border" />
+                          )}
+                          
+                          <div className="flex gap-4">
+                            {/* Timeline marker */}
+                            <div className="relative flex-shrink-0">
+                              <div className="w-6 h-6 rounded-full bg-primary/10 border-2 border-primary flex items-center justify-center">
+                                <div className="w-2 h-2 rounded-full bg-primary" />
+                              </div>
+                            </div>
+
+                            {/* Content */}
+                            <div className="flex-1 space-y-3">
+                              {/* Header */}
+                              <div className="flex items-start justify-between gap-2">
+                                <h4 className="font-semibold text-lg leading-none pt-1">
+                                  {step.step}
+                                </h4>
+                                <span className="text-sm font-medium text-muted-foreground bg-muted px-2 py-1 rounded-md">
+                                  {step.time}
+                                </span>
+                              </div>
+
+                              {/* Description */}
+                              <p className="text-muted-foreground">
+                                {step.description}
                               </p>
-                            ))}
+
+                              {/* Temperature */}
+                              {showTemp && (
+                                <div className="flex items-center gap-2 text-sm text-primary">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-primary" />
+                                  <span>{step.temperature}°F</span>
+                                </div>
+                              )}
+
+                              {/* Tips */}
+                              {step.tips && step.tips.length > 0 && (
+                                <div className="space-y-2 pl-4 border-l-2 border-muted mt-2">
+                                  {step.tips.map((tip, tipIndex) => (
+                                    <p key={tipIndex} className="text-sm text-muted-foreground">
+                                      {tip}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    ))}
+
+                          {/* Time gap indicator */}
+                          {timeGap && (
+                            <div className="ml-10 mt-2 flex items-center gap-2 text-sm text-muted-foreground">
+                              <Clock className="h-3.5 w-3.5" />
+                              <span>Wait {timeGap}</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>

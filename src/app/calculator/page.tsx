@@ -1,4 +1,4 @@
-// Restore original imports and remove test component import
+// Import the main calculator component
 import { DoughCalculator } from '@/components/DoughCalculator'
 // import { TestSelect } from '@/components/calculator/TestSelect'
 
