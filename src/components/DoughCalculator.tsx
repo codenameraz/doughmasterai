@@ -350,6 +350,18 @@ const calculateTimeGap = (currentTime: string, nextTime: string): string | null 
   return `${hours} hour${hours > 1 ? 's' : ''} ${minutes} minutes`;
 };
 
+// Add a helper function at the top of the file
+function getFlourTypeDisplay(flour: { type: string; percentage: number; proteinContent: string; purpose: string }) {
+  if (flour.type.toLowerCase() === 'not specified') {
+    return {
+      ...flour,
+      type: 'Recommended Flour',
+      purpose: flour.purpose || 'Traditional Neapolitan pizza flour with optimal protein content for proper gluten development.'
+    };
+  }
+  return flour;
+}
+
 export function DoughCalculator() {
   // --- State ---
   const [doughBalls, setDoughBalls] = useState<string>('4');
@@ -1112,19 +1124,6 @@ export function DoughCalculator() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-6">
-                    {/* Flour Recommendation */}
-                    {recipeResult.flourRecommendation && (
-                      <div className="rounded-md border bg-muted/20 p-3">
-                        <div className="flex items-start gap-2">
-                          <Wheat className="h-4 w-4 mt-0.5 text-primary" />
-                          <div>
-                            <h4 className="text-sm font-medium mb-1">Recommended Flour</h4>
-                            <p className="text-sm text-muted-foreground">{recipeResult.flourRecommendation}</p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    
                     {/* Ingredients */}
                     <div>
                       <h3 className="text-lg font-semibold mb-4">Ingredients</h3>
@@ -1365,53 +1364,89 @@ export function DetailedAnalysis({ analysis }: { analysis: DetailedAnalysis }) {
       </TabsList>
 
       <TabsContent value="flour" className="mt-4 space-y-4">
-        <div className="space-y-4">
-          <div>
-            <p className="text-muted-foreground leading-relaxed">{analysis.flourAnalysis.rationale}</p>
-            {analysis.flourAnalysis.proteinContent && (
-              <div className="mt-2">
-                <Badge variant="secondary" className="text-sm">
-                  Protein Content: {analysis.flourAnalysis.proteinContent}
-                </Badge>
+        <div className="space-y-6">
+          {/* Main Flour Section */}
+          <div className="rounded-lg border bg-card p-4">
+            <h3 className="text-lg font-semibold mb-3">Recommended Flour Mix</h3>
+            {/* General Flour Recommendation */}
+            <div className="mb-4 rounded-md bg-muted/50 p-3">
+              <div className="flex items-start gap-2">
+                <Wheat className="h-4 w-4 mt-0.5 text-primary" />
+                <p className="text-sm text-muted-foreground">{analysis.flourAnalysis.rationale}</p>
+              </div>
+            </div>
+            
+            {/* Primary Flour */}
+            {analysis.flourAnalysis.flours.filter(f => f.percentage >= 50).map((flour, index) => {
+              const displayFlour = getFlourTypeDisplay(flour);
+              return (
+                <div key={index} className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Badge className="bg-primary text-primary-foreground">Primary</Badge>
+                      <h4 className="font-medium">{displayFlour.type}</h4>
+                    </div>
+                    <Badge variant="outline" className="bg-background">
+                      {displayFlour.percentage}%
+                    </Badge>
+                  </div>
+                  {displayFlour.proteinContent && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">Protein Content:</span>
+                      <span className="text-sm text-muted-foreground">{displayFlour.proteinContent}</span>
+                    </div>
+                  )}
+                  <p className="text-sm text-muted-foreground">{displayFlour.purpose}</p>
+                </div>
+              );
+            })}
+
+            {/* Secondary Flours */}
+            {analysis.flourAnalysis.flours.filter(f => f.percentage < 50).length > 0 && (
+              <div className="mt-6 space-y-4">
+                <h4 className="font-medium text-sm text-muted-foreground">Additional Flours</h4>
+                <div className="grid gap-3">
+                  {analysis.flourAnalysis.flours.filter(f => f.percentage < 50).map((flour, index) => {
+                    const displayFlour = getFlourTypeDisplay(flour);
+                    return (
+                      <div key={index} className="rounded-lg bg-muted/50 p-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <h4 className="font-medium">{displayFlour.type}</h4>
+                          <Badge variant="outline" className="bg-background">
+                            {displayFlour.percentage}%
+                          </Badge>
+                        </div>
+                        {displayFlour.proteinContent && (
+                          <div className="mb-1">
+                            <span className="text-sm text-muted-foreground">
+                              Protein Content: <span className="text-foreground">{displayFlour.proteinContent}</span>
+                            </span>
+                          </div>
+                        )}
+                        <p className="text-sm text-muted-foreground">{displayFlour.purpose}</p>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
-          
-          <div className="grid gap-3">
-            {analysis.flourAnalysis.flours.map((flour, index) => (
-              <div key={index} className="rounded-lg border bg-card p-3 transition-colors hover:bg-accent/10">
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-2">
-                    <div className="h-2 w-2 rounded-full bg-primary" />
-                    <h4 className="font-medium">{flour.type}</h4>
-                  </div>
-                  <Badge variant="outline" className="bg-background">
-                    {flour.percentage}%
-                  </Badge>
-                </div>
-                {flour.proteinContent && (
-                  <div className="mb-1">
-                    <span className="text-sm text-muted-foreground">
-                      Protein Content: <span className="text-foreground">{flour.proteinContent}</span>
-                    </span>
-                  </div>
-                )}
-                <p className="text-sm text-muted-foreground">{flour.purpose}</p>
-              </div>
-            ))}
-          </div>
-          
+
+          {/* Alternative Options */}
           {analysis.flourAnalysis.alternatives && analysis.flourAnalysis.alternatives.length > 0 && (
-            <div className="rounded-lg border bg-card/50 p-3">
-              <h4 className="font-medium mb-2">Alternative Options</h4>
-              <ul className="space-y-1">
+            <div className="rounded-lg border bg-card p-4">
+              <h3 className="text-lg font-semibold mb-3">Alternative Options</h3>
+              <p className="text-sm text-muted-foreground mb-3">
+                If you can't find the recommended flours, these alternatives will work well:
+              </p>
+              <div className="space-y-2">
                 {analysis.flourAnalysis.alternatives.map((alt, index) => (
-                  <li key={index} className="text-sm text-muted-foreground flex items-start gap-2">
-                    <span className="text-primary mt-1">•</span>
-                    <span>{alt}</span>
-                  </li>
+                  <div key={index} className="flex items-start gap-2 text-sm">
+                    <div className="h-2 w-2 rounded-full bg-primary mt-1.5" />
+                    <span className="text-muted-foreground">{alt}</span>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </div>
           )}
         </div>
@@ -1541,16 +1576,16 @@ export function DetailedAnalysis({ analysis }: { analysis: DetailedAnalysis }) {
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <Badge variant="secondary" className="text-lg px-4 py-1">
-                {analysis.ovenAnalysis.maxTemp}°F
+                {analysis.ovenAnalysis?.maxTemp}°F
               </Badge>
-              <span className="text-muted-foreground">{analysis.ovenAnalysis.ovenType}</span>
+              <span className="text-muted-foreground">{analysis.ovenAnalysis?.ovenType}</span>
             </div>
 
             <div className="grid gap-3">
               <div className="rounded-lg border bg-card/50 p-3">
                 <h4 className="font-medium mb-2">Baking Recommendations</h4>
                 <ul className="space-y-2">
-                  {analysis.ovenAnalysis.recommendations.map((rec, index) => (
+                  {analysis.ovenAnalysis?.recommendations.map((rec, index) => (
                     <li key={index} className="flex items-start gap-2 text-sm">
                       <div className="h-2 w-2 rounded-full bg-primary mt-1" />
                       <span className="text-muted-foreground">{rec}</span>
@@ -1562,7 +1597,7 @@ export function DetailedAnalysis({ analysis }: { analysis: DetailedAnalysis }) {
               <div className="rounded-lg border bg-card/50 p-3">
                 <h4 className="font-medium mb-2">Impact on Dough</h4>
                 <ul className="space-y-2">
-                  {analysis.ovenAnalysis.impact.map((impact, index) => (
+                  {analysis.ovenAnalysis?.impact.map((impact, index) => (
                     <li key={index} className="flex items-start gap-2 text-sm">
                       <div className="h-2 w-2 rounded-full bg-primary mt-1" />
                       <span className="text-muted-foreground">{impact}</span>
