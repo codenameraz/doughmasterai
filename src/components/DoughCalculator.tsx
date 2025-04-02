@@ -28,6 +28,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { motion } from "framer-motion";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 // --- Interfaces ---
 interface YeastInfo { type: "fresh" | "active dry" | "instant"; percentage: number; }
@@ -80,19 +82,23 @@ interface FermentationInput {
 interface ApiPayload {
     doughBalls: number;
     weightPerBall: number;
-    style: PizzaStyleValue;
+    style: string;
     recipe: {
         hydration: number;
         salt: number;
         oil: number | null;
-        flourMix: FlourMix | null;
-        fermentationTime: FermentationType;
+        flourMix: {
+            primaryType: string;
+            secondaryType?: string;
+            primaryPercentage: number;
+        } | null;
+        fermentationTime: string;
         yeast: {
-            type: 'fresh' | 'active dry' | 'instant';
+            type: string;
         };
     };
     fermentation: {
-        schedule: FermentationType;
+        schedule: string;
         temperature: {
             room: number | null;
             cold: number | null;
@@ -104,6 +110,8 @@ interface ApiPayload {
     };
     environment?: {
         altitude?: number;
+        ovenType?: 'home' | 'outdoor';
+        maxOvenTemp?: number;
     };
     analysisPreferences: {
         detailedAnalysis: boolean;
@@ -135,6 +143,12 @@ interface DetailedAnalysis {
         type: string;
         proteinContent: string;
         rationale: string;
+        flours: Array<{
+            type: string;
+            percentage: number;
+            proteinContent: string;
+            purpose: string;
+        }>;
         alternatives?: string[];
     };
     hydrationAnalysis: {
@@ -166,6 +180,12 @@ interface DetailedAnalysis {
         };
         enzymaticActivity: string;
         gluten: string;
+    };
+    ovenAnalysis?: {
+        ovenType: string;
+        maxTemp: number;
+        recommendations: string[];
+        impact: string[];
     };
 }
 
@@ -228,34 +248,6 @@ const FERMENTATION_OPTIONS = [
 
 type FermentationType = typeof FERMENTATION_OPTIONS[number]['value'];
 
-const FERMENTATION_SCHEDULES: Record<FermentationType, FermentationScheduleConfig> = {
-    'quick': {
-        duration: { min: 2, max: 4 },
-        temperature: { room: 75, cold: null },
-        description: 'Room temperature fermentation only'
-    },
-    'same-day': {
-        duration: { min: 8, max: 12 },
-        temperature: { room: 75, cold: null },
-        description: 'Room temperature fermentation only'
-    },
-    'overnight': {
-        duration: { min: 16, max: 20 },
-        temperature: { room: 72, cold: 38 },
-        description: 'Mixed room and cold fermentation'
-    },
-    'cold': {
-        duration: { min: 24, max: 72 },
-        temperature: { room: null, cold: 38 },
-        description: 'Cold fermentation only'
-    },
-    'custom': {
-        duration: { min: 4, max: 72 },
-        temperature: { room: 75, cold: 38 },
-        description: 'Custom schedule based on target date'
-    }
-};
-
 // Add this near other interfaces
 interface LoadingStep {
   icon: React.ReactNode;
@@ -271,6 +263,22 @@ const LOADING_STEPS: LoadingStep[] = [
   { icon: <Scale className="h-4 w-4" />, text: "Calculating ratios..." },
   { icon: <Clock className="h-4 w-4" />, text: "Planning schedule..." },
 ];
+
+// Add oven type constants
+const OVEN_TYPES = {
+  home: {
+    label: 'Home Oven',
+    description: '450-550°F',
+    maxTemp: 550
+  },
+  outdoor: {
+    label: 'Outdoor Pizza Oven',
+    description: '700-950°F',
+    maxTemp: 950
+  }
+};
+
+type OvenType = keyof typeof OVEN_TYPES;
 
 // --- End Constants ---
 
@@ -307,25 +315,39 @@ const renderImpactList = (impacts: string[] | undefined | null) => {
   ));
 };
 
-// Add this helper function near the top of the file with other helper functions
+// Update the calculateTimeGap function to handle API response time formats
 const calculateTimeGap = (currentTime: string, nextTime: string): string | null => {
-  try {
-    // Parse the time strings into hours
-    const current = parseFloat(currentTime.split(' ')[0]);
-    const next = parseFloat(nextTime.split(' ')[0]);
+  if (!currentTime || !nextTime) return null;
+  if (currentTime === 'Start') return null;
+  
+  // Convert time strings to minutes for comparison
+  const getMinutes = (timeStr: string): number => {
+    const hoursMatch = timeStr.match(/(\d+)\s*hours?/);
+    const minutesMatch = timeStr.match(/(\d+)\s*minutes?/);
     
-    if (isNaN(current) || isNaN(next)) return null;
-    
-    const diff = next - current;
-    if (diff <= 0) return null;
-    
-    if (diff < 1) {
-      return `${Math.round(diff * 60)} minutes`;
-    }
-    return diff === 1 ? '1 hour' : `${diff} hours`;
-  } catch {
-    return null;
+    let total = 0;
+    if (hoursMatch) total += parseInt(hoursMatch[1]) * 60;
+    if (minutesMatch) total += parseInt(minutesMatch[1]);
+    return total;
+  };
+
+  const currentMinutes = getMinutes(currentTime);
+  const nextMinutes = getMinutes(nextTime);
+  
+  if (currentMinutes === 0 || nextMinutes === 0) return null;
+  
+  const diffMinutes = nextMinutes - currentMinutes;
+  if (diffMinutes <= 0) return null;
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes} minutes`;
   }
+  const hours = Math.floor(diffMinutes / 60);
+  const minutes = diffMinutes % 60;
+  if (minutes === 0) {
+    return `${hours} hour${hours > 1 ? 's' : ''}`;
+  }
+  return `${hours} hour${hours > 1 ? 's' : ''} ${minutes} minutes`;
 };
 
 export function DoughCalculator() {
@@ -334,6 +356,7 @@ export function DoughCalculator() {
   const [weightPerBall, setWeightPerBall] = useState<string>('250');
   const [selectedStyle, setSelectedStyle] = useState<PizzaStyleValue>('neapolitan');
   const [altitude, setAltitude] = useState('');
+  const [ovenType, setOvenType] = useState<OvenType>('home');
 
   // Ingredient Sliders
   const [hydration, setHydration] = useState<number>(65);
@@ -361,19 +384,14 @@ export function DoughCalculator() {
   const [fermentationTime, setFermentationTime] = useState<FermentationType>('same-day');
   const [targetDate, setTargetDate] = useState<Date>();
 
-  // Add state for technical analysis visibility
-  const [showTechnicalAnalysis, setShowTechnicalAnalysis] = useState(false);
-
-  // Add to state section near the top of the component:
-  const [autolyse, setAutolyse] = useState(false);
-
   // Add this inside the DoughCalculator component, near other state
   const [loadingStep, setLoadingStep] = useState<number>(0);
 
   // Add new state for tracking changes
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
-  // --- End State ---
+  // Add a unique key state for the timeline component
+  const [timelineKey, setTimelineKey] = useState<number>(0);
 
   // --- Effects ---
   useEffect(() => {
@@ -381,6 +399,7 @@ export function DoughCalculator() {
     setIsCustomStyle(isCustom);
     setRecipeResult(null);
     setError(null);
+    setTimelineKey(prev => prev + 1); // Force timeline remount
 
     if (!isCustom) {
       if (selectedStyle in STYLE_DEFAULTS) {
@@ -398,6 +417,16 @@ export function DoughCalculator() {
       setPrimaryFlourPercentage(100);
     }
   }, [selectedStyle]);
+
+  // Update fermentation time effect to completely destroy and recreate state
+  useEffect(() => {
+    console.log("Fermentation type changed, resetting state");
+    setRecipeResult(null);
+    setError(null);
+    setIsCalculated(false);
+    setHasUnsavedChanges(false);
+    setTimelineKey(prev => prev + 1); // Force timeline remount
+  }, [fermentationTime]);
 
   useEffect(() => {
     setRecipeResult(null);
@@ -432,7 +461,6 @@ export function DoughCalculator() {
     fermentationTime,
     targetDate,
     altitude,
-    autolyse,
     primaryFlourType,
     secondaryFlourType,
     primaryFlourPercentage,
@@ -478,14 +506,58 @@ export function DoughCalculator() {
     };
   };
 
-  // --- Handlers ---
-  const getFermentationDetails = (schedule: FermentationType): FermentationScheduleConfig => {
-    return FERMENTATION_SCHEDULES[schedule];
+  // Completely replace the resetState function with a more robust version
+  const resetState = () => {
+    console.log("Resetting recipe state");
+    setRecipeResult(null);
+    setError(null);
+    setIsCalculated(false);
+    setHasUnsavedChanges(false);
+    setTimelineKey(prev => prev + 1); // Force timeline remount
   };
 
+  // --- Handlers ---
+  const getFermentationDetails = (schedule: FermentationType): FermentationScheduleConfig => {
+    const defaultSchedules: Record<FermentationType, FermentationScheduleConfig> = {
+      'quick': {
+        duration: { min: 2, max: 4 },
+        temperature: { room: 75, cold: null },
+        description: 'Quick same-day fermentation'
+      },
+      'same-day': {
+        duration: { min: 8, max: 12 },
+        temperature: { room: 75, cold: null },
+        description: 'Same-day fermentation'
+      },
+      'overnight': {
+        duration: { min: 16, max: 20 },
+        temperature: { room: 72, cold: 38 },
+        description: 'Overnight fermentation'
+      },
+      'cold': {
+        duration: { min: 24, max: 72 },
+        temperature: { room: null, cold: 38 },
+        description: 'Cold fermentation'
+      },
+      'custom': {
+        duration: { min: 4, max: 72 },
+        temperature: { room: 75, cold: 38 },
+        description: 'Custom schedule'
+      }
+    };
+    return defaultSchedules[schedule];
+  };
+
+  // Update the handleCalculate function to include oven type
   const handleCalculate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    // Reset all state to ensure fresh calculation
+    setRecipeResult(null); // Explicitly null out the result
     setError(null);
+    setIsCalculated(false);
+    setHasUnsavedChanges(false);
+    setTimelineKey(prev => prev + 1); // Force timeline remount
+    
     setIsLoading(true);
     setLoadingStep(0);
 
@@ -497,6 +569,10 @@ export function DoughCalculator() {
         throw new Error("Please enter valid numbers for Dough Balls and Weight/Ball.");
       }
 
+      console.log(`Calculating recipe for ${fermentationTime} fermentation with ${ovenType} oven`);
+
+      const selectedOvenType = OVEN_TYPES[ovenType];
+      
       const payload: ApiPayload = {
         doughBalls: numDoughBalls,
         weightPerBall: numWeightPerBall,
@@ -520,16 +596,20 @@ export function DoughCalculator() {
           temperature: getFermentationDetails(fermentationTime).temperature,
           duration: getFermentationDetails(fermentationTime).duration
         },
-        ...(altitude ? { environment: { altitude: parseInt(altitude) } } : {}),
+        environment: {
+          ...(altitude ? { altitude: parseInt(altitude) } : {}),
+          ovenType: ovenType,
+          maxOvenTemp: selectedOvenType?.maxTemp
+        },
         analysisPreferences: {
           detailedAnalysis: true,
           explainRationale: true,
           avoidGenericResponses: true,
           requireSpecificAnalysis: true,
-          includeAutolyse: autolyse,
-          skipAutolyse: !autolyse,
+          includeAutolyse: true,
+          skipAutolyse: false,
           processSteps: {
-            autolyse: autolyse,
+            autolyse: true,
             initialMix: true,
             bulkFermentation: true,
             divideAndBall: true,
@@ -538,10 +618,15 @@ export function DoughCalculator() {
         }
       };
 
-      const response = await fetch('/api/recipe-adjust', {
+      // Add a timestamp to prevent browser caching
+      const timestamp = new Date().getTime();
+      const response = await fetch(`/api/recipe-adjust?t=${timestamp}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
         },
         body: JSON.stringify(payload),
       });
@@ -578,22 +663,25 @@ export function DoughCalculator() {
   // Update the Hydration slider to use rounded values
   const handleHydrationChange = (value: number[]) => {
     setHydration(roundToDecimal(value[0]));
+    resetState();
   };
 
   // Update the Salt slider to use rounded values
   const handleSaltChange = (value: number[]) => {
     setSalt(roundToDecimal(value[0]));
+    resetState();
   };
 
   // Update the Oil slider to use rounded values
   const handleOilChange = (value: number[]) => {
     setOil(roundToDecimal(value[0]));
+    resetState();
   };
 
   // Restore original handler signature (no console log)
   const handleSecondaryFlourToggle = (checked: boolean) => {
-    console.log('Toggle clicked:', checked); // Debug log
     setAddSecondaryFlour(checked);
+    resetState();
     if (!checked) {
       setPrimaryFlourPercentage(100);
     }
@@ -603,11 +691,13 @@ export function DoughCalculator() {
     const value = e.target.value;
     if (value === '') {
         setDoughBalls('');
+        resetState();
         return;
     }
     const numValue = parseInt(value);
     if (!isNaN(numValue) && numValue >= 1 && numValue <= 100) {
         setDoughBalls(value);
+        resetState();
     }
   };
 
@@ -615,13 +705,16 @@ export function DoughCalculator() {
     const value = e.target.value;
     if (value === '') {
         setWeightPerBall('');
+        resetState();
         return;
     }
     const numValue = parseInt(value);
     if (!isNaN(numValue)) {
         setWeightPerBall(value);
+        resetState();
     }
   };
+
   // --- End Handlers ---
 
   return (
@@ -643,7 +736,10 @@ export function DoughCalculator() {
                     <Label className="text-sm font-medium">Pizza Style</Label>
                     <Select 
                       value={selectedStyle} 
-                      onValueChange={(v) => setSelectedStyle(v as PizzaStyleValue)} 
+                      onValueChange={(v) => {
+                        setSelectedStyle(v as PizzaStyleValue);
+                        resetState();
+                      }}
                       required
                     >
                       <SelectTrigger className="relative bg-background h-10">
@@ -662,7 +758,10 @@ export function DoughCalculator() {
                     <Label className="text-sm font-medium">Fermentation Schedule</Label>
                     <Select 
                       value={fermentationTime} 
-                      onValueChange={(v) => setFermentationTime(v as FermentationType)}
+                      onValueChange={(v) => {
+                        setFermentationTime(v as FermentationType);
+                        resetState(); // Explicitly reset state when changing fermentation type
+                      }}
                     >
                       <SelectTrigger className="relative bg-background h-10">
                         <SelectValue placeholder="Select fermentation time" />
@@ -785,7 +884,10 @@ export function DoughCalculator() {
                       <CardContent className="space-y-4">
                         <div className="space-y-2">
                           <Label>Primary Flour</Label>
-                          <Select value={primaryFlourType} onValueChange={(v) => setPrimaryFlourType(v as FlourType)}>
+                          <Select value={primaryFlourType} onValueChange={(v) => {
+                            setPrimaryFlourType(v as FlourType);
+                            resetState();
+                          }}>
                             <SelectTrigger className="relative bg-background">
                               <SelectValue placeholder="Select primary flour" />
                             </SelectTrigger>
@@ -809,7 +911,10 @@ export function DoughCalculator() {
                           <div className="space-y-4">
                             <div className="space-y-2">
                               <Label>Secondary Flour</Label>
-                              <Select value={secondaryFlourType} onValueChange={(v) => setSecondaryFlourType(v as FlourType)}>
+                              <Select value={secondaryFlourType} onValueChange={(v) => {
+                                setSecondaryFlourType(v as FlourType);
+                                resetState();
+                              }}>
                                 <SelectTrigger className="relative bg-background">
                                   <SelectValue placeholder="Select secondary flour" />
                                 </SelectTrigger>
@@ -828,7 +933,10 @@ export function DoughCalculator() {
                               </div>
                               <Slider
                                 value={[primaryFlourPercentage]}
-                                onValueChange={(value) => setPrimaryFlourPercentage(value[0])}
+                                onValueChange={(value) => {
+                                  setPrimaryFlourPercentage(value[0]);
+                                  resetState();
+                                }}
                                 min={0}
                                 max={100}
                                 step={5}
@@ -845,50 +953,31 @@ export function DoughCalculator() {
                     </Card>
                   )}
 
-                  {/* Advanced Options */}
-                  <Collapsible>
-                    <Card className="bg-muted/30">
-                      <CardHeader className="pb-2 px-4">
-                        <CollapsibleTrigger className="flex items-center justify-between w-full text-left -ml-1">
-                          <div className="space-y-1">
-                            <CardTitle className="text-base">Advanced Options</CardTitle>
-                            <CardDescription>Fine-tune your dough making process</CardDescription>
-                          </div>
-                          <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform duration-200" />
-                        </CollapsibleTrigger>
-                      </CardHeader>
-                      <CollapsibleContent>
-                        <CardContent className="pt-2 px-4 space-y-6">
-                          <div className="flex items-center gap-2">
-                            <Switch
-                              checked={autolyse}
-                              onCheckedChange={setAutolyse}
-                              id="autolyse"
-                            />
-                            <div className="space-y-0.5">
-                              <Label htmlFor="autolyse" className="text-sm font-medium">Autolyse</Label>
-                              <p className="text-sm text-muted-foreground">Pre-mix flour and water for better gluten development</p>
-                            </div>
-                          </div>
-
-                          <div className="space-y-2 pt-2 border-t">
-                            <Label className="text-sm font-medium">Altitude Adjustment</Label>
-                            <div className="flex gap-2 items-center">
-                              <Input 
-                                type="number" 
-                                placeholder="0" 
-                                value={altitude} 
-                                onChange={(e) => setAltitude(e.target.value)}
-                                className="relative bg-background h-10"
-                              />
-                              <span className="text-sm text-muted-foreground">meters</span>
-                            </div>
-                            <p className="text-sm text-muted-foreground">Adjusts recipe for high-altitude baking</p>
-                          </div>
-                        </CardContent>
-                      </CollapsibleContent>
-                    </Card>
-                  </Collapsible>
+                  {/* Oven Type Section - Moved out of advanced options */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="ovenType">Oven Type</Label>
+                      <span className="text-muted-foreground text-sm">
+                        {OVEN_TYPES[ovenType].maxTemp}°F max
+                      </span>
+                    </div>
+                    <Select 
+                      value={ovenType}
+                      onValueChange={(value: OvenType) => setOvenType(value)}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select oven type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="home">
+                          {OVEN_TYPES.home.label} ({OVEN_TYPES.home.description})
+                        </SelectItem>
+                        <SelectItem value="outdoor">
+                          {OVEN_TYPES.outdoor.label} ({OVEN_TYPES.outdoor.description})
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
 
                   {/* Core Ingredient Sliders */}
                   <div className="grid gap-6 pt-2">
@@ -1023,6 +1112,19 @@ export function DoughCalculator() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-6">
+                    {/* Flour Recommendation */}
+                    {recipeResult.flourRecommendation && (
+                      <div className="rounded-md border bg-muted/20 p-3">
+                        <div className="flex items-start gap-2">
+                          <Wheat className="h-4 w-4 mt-0.5 text-primary" />
+                          <div>
+                            <h4 className="text-sm font-medium mb-1">Recommended Flour</h4>
+                            <p className="text-sm text-muted-foreground">{recipeResult.flourRecommendation}</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
                     {/* Ingredients */}
                     <div>
                       <h3 className="text-lg font-semibold mb-4">Ingredients</h3>
@@ -1080,7 +1182,7 @@ export function DoughCalculator() {
                             <div className="grid grid-cols-2 gap-4 pt-4">
                               <div className="p-3 bg-muted rounded-lg">
                                 <p className="text-sm text-muted-foreground">Total Time</p>
-                                <p className="font-semibold">{recipeResult.detailedAnalysis.fermentationAnalysis.totalTime} </p>
+                                <p className="font-semibold">{recipeResult.detailedAnalysis.fermentationAnalysis.totalTime} hours</p>
                               </div>
                               <div className="p-3 bg-muted rounded-lg">
                                 <p className="text-sm text-muted-foreground">Hydration</p>
@@ -1096,7 +1198,7 @@ export function DoughCalculator() {
               </Card>
 
               {/* Timeline Card */}
-              <Card>
+              <Card className="flex flex-col" key={`timeline-card-${timelineKey}-${fermentationTime}`}>
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
                     <div className="space-y-1">
@@ -1105,191 +1207,116 @@ export function DoughCalculator() {
                         Process Timeline
                       </CardTitle>
                       <CardDescription className="text-base">
-                        Total time: {recipeResult.detailedAnalysis.fermentationAnalysis.totalTime}
+                        Total time: {recipeResult.detailedAnalysis.fermentationAnalysis.totalTime} hours
+                        {(fermentationTime === 'cold' || fermentationTime === 'overnight') && 
+                         recipeResult.detailedAnalysis.fermentationAnalysis.roomTemp && 
+                         recipeResult.detailedAnalysis.fermentationAnalysis.coldTemp && (
+                          <span className="text-sm text-muted-foreground ml-1">
+                            (Includes {recipeResult.detailedAnalysis.fermentationAnalysis.roomTemp.time} hours room temp,{' '}
+                            {recipeResult.detailedAnalysis.fermentationAnalysis.coldTemp.time} hours cold)
+                          </span>
+                        )}
                       </CardDescription>
                     </div>
+                    <Badge variant="outline" className="text-xs bg-primary/5">
+                      {fermentationTime}
+                    </Badge>
                   </div>
                 </CardHeader>
-                <CardContent>
-                  <div className="relative space-y-6">
-                    {recipeResult.timeline
-                      .filter(step => autolyse || !step.step.toLowerCase().includes('autolyse'))
-                      .map((step, index, filteredSteps) => {
-                      const nextStep = filteredSteps[index + 1];
-                      const timeGap = nextStep ? calculateTimeGap(step.time, nextStep.time) : null;
-                      const showTemp = step.temperature && 
-                        !step.step.toLowerCase().includes('mix') && 
-                        !step.step.toLowerCase().includes('knead');
-                      
-                      return (
-                        <div key={index} className="relative">
-                          {/* Timeline connector line */}
-                          {index < filteredSteps.length - 1 && (
-                            <div className="absolute left-[11px] top-[30px] w-0.5 h-[calc(100%+24px)] bg-border" />
-                          )}
+                <CardContent className="overflow-y-auto max-h-[800px] flex-grow pb-6">
+                  <div className="relative space-y-6 pb-4">
+                    {recipeResult?.timeline && (
+                      <div className="relative space-y-6">
+                        {recipeResult.timeline.map((step, index, filteredSteps) => {
+                          const nextStep = filteredSteps[index + 1];
+                          const timeGap = nextStep ? calculateTimeGap(step.time, nextStep.time) : null;
+                          const showTemp = step.temperature && 
+                            !step.step.toLowerCase().includes('mix') && 
+                            !step.step.toLowerCase().includes('knead');
                           
-                          <div className="flex gap-4">
-                            {/* Timeline marker */}
-                            <div className="relative flex-shrink-0">
-                              <div className="w-6 h-6 rounded-full bg-primary/10 border-2 border-primary flex items-center justify-center">
-                                <div className="w-2 h-2 rounded-full bg-primary" />
+                          return (
+                            <div key={index} className="relative">
+                              {/* Timeline connector line */}
+                              {index < filteredSteps.length - 1 && (
+                                <div className="absolute left-[11px] top-[30px] w-0.5 h-[calc(100%+24px)] bg-border" />
+                              )}
+                              
+                              <div className="flex gap-4">
+                                {/* Timeline marker */}
+                                <div className="relative flex-shrink-0">
+                                  <div className="w-6 h-6 rounded-full bg-primary/10 border-2 border-primary flex items-center justify-center">
+                                    <div className="w-2 h-2 rounded-full bg-primary" />
+                                  </div>
+                                </div>
+
+                                {/* Content */}
+                                <div className="flex-1 space-y-3">
+                                  {/* Header */}
+                                  <div className="flex items-start justify-between gap-2">
+                                    <h4 className="font-semibold text-lg leading-none pt-1">
+                                      {step.step}
+                                    </h4>
+                                    <span className="text-sm font-medium text-muted-foreground bg-muted px-2 py-1 rounded-md whitespace-nowrap">
+                                      {step.time}
+                                    </span>
+                                  </div>
+
+                                  {/* Description */}
+                                  <p className="text-muted-foreground">
+                                    {step.description}
+                                  </p>
+
+                                  {/* Temperature */}
+                                  {showTemp && step.temperature && (
+                                    <div className="flex items-center gap-2 text-sm text-primary">
+                                      <div className="w-1.5 h-1.5 rounded-full bg-primary" />
+                                      <span>{step.temperature}°F</span>
+                                    </div>
+                                  )}
+
+                                  {/* Tips */}
+                                  {step.tips && step.tips.length > 0 && (
+                                    <div className="space-y-2 pl-4 border-l-2 border-muted mt-2">
+                                      {step.tips.map((tip, tipIndex) => (
+                                        <p key={tipIndex} className="text-sm text-muted-foreground">
+                                          {tip}
+                                        </p>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
-                            </div>
 
-                            {/* Content */}
-                            <div className="flex-1 space-y-3">
-                              {/* Header */}
-                              <div className="flex items-start justify-between gap-2">
-                                <h4 className="font-semibold text-lg leading-none pt-1">
-                                  {step.step}
-                                </h4>
-                                <span className="text-sm font-medium text-muted-foreground bg-muted px-2 py-1 rounded-md">
-                                  {step.time}
-                                </span>
-                              </div>
-
-                              {/* Description */}
-                              <p className="text-muted-foreground">
-                                {step.description}
-                              </p>
-
-                              {/* Temperature */}
-                              {showTemp && (
-                                <div className="flex items-center gap-2 text-sm text-primary">
-                                  <div className="w-1.5 h-1.5 rounded-full bg-primary" />
-                                  <span>{step.temperature}°F</span>
+                              {/* Time gap indicator */}
+                              {timeGap && (
+                                <div className="ml-10 mt-2 flex items-center gap-2 text-sm text-muted-foreground">
+                                  <Clock className="h-3.5 w-3.5" />
+                                  <span>Wait {timeGap}</span>
                                 </div>
                               )}
-
-                              {/* Tips */}
-                              {step.tips && step.tips.length > 0 && (
-                                <div className="space-y-2 pl-4 border-l-2 border-muted mt-2">
-                                  {step.tips.map((tip, tipIndex) => (
-                                    <p key={tipIndex} className="text-sm text-muted-foreground">
-                                      {tip}
-                                    </p>
-                                  ))}
-                                </div>
-                              )}
                             </div>
-                          </div>
-
-                          {/* Time gap indicator */}
-                          {timeGap && (
-                            <div className="ml-10 mt-2 flex items-center gap-2 text-sm text-muted-foreground">
-                              <Clock className="h-3.5 w-3.5" />
-                              <span>Wait {timeGap}</span>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
             </div>
 
-            {/* Technical Analysis Card - Full Width */}
+            {/* Technical Analysis Card - Always show it */}
             <Card>
-              <CardHeader>
-                <CardTitle>Technical Analysis</CardTitle>
-                <CardDescription>{recipeResult.technicalAnalysis}</CardDescription>
+              <CardHeader className="pb-4 border-b">
+                <CardTitle className="flex items-center gap-2">
+                  <ChefHat className="h-5 w-5 text-primary" />
+                  Technical Analysis
+                </CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="grid gap-6 md:grid-cols-2">
-                  {/* Left Column */}
-                  <div className="space-y-6">
-                    {/* Flour Analysis */}
-                    <div className="space-y-2">
-                      <h4 className="font-medium flex items-center gap-2">
-                        <Wheat className="h-4 w-4" />
-                        Flour Analysis
-                      </h4>
-                      <div className="text-sm space-y-2">
-                        <p>{recipeResult.detailedAnalysis.flourAnalysis.type}</p>
-                        <p className="text-muted-foreground">{recipeResult.detailedAnalysis.flourAnalysis.proteinContent}</p>
-                        <p className="text-muted-foreground">{recipeResult.detailedAnalysis.flourAnalysis.rationale}</p>
-                      </div>
-                    </div>
-
-                    {/* Hydration Analysis */}
-                    <div className="space-y-2">
-                      <h4 className="font-medium flex items-center gap-2">
-                        <Droplet className="h-4 w-4" />
-                        Hydration Analysis
-                      </h4>
-                      <div className="text-sm space-y-2">
-                        <p className="text-muted-foreground">{recipeResult.detailedAnalysis.hydrationAnalysis.rationale}</p>
-                        <div className="space-y-1">
-                          {renderImpactList(recipeResult.detailedAnalysis.hydrationAnalysis.impact)}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right Column */}
-                  <div className="space-y-6">
-                    {/* Salt Analysis */}
-                    <div className="space-y-2">
-                      <h4 className="font-medium flex items-center gap-2">
-                        <CircleDot className="h-4 w-4" />
-                        Salt Analysis
-                      </h4>
-                      <div className="text-sm space-y-2">
-                        <p className="text-muted-foreground">{recipeResult.detailedAnalysis.saltAnalysis.rationale}</p>
-                        <div className="space-y-1">
-                          {renderImpactList(recipeResult.detailedAnalysis.saltAnalysis.impact)}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Oil Analysis */}
-                    {recipeResult.detailedAnalysis.oilAnalysis && (
-                      <div className="space-y-2">
-                        <h4 className="font-medium flex items-center gap-2">
-                          <Droplets className="h-4 w-4" />
-                          Oil Analysis
-                        </h4>
-                        <div className="text-sm space-y-2">
-                          <p className="text-muted-foreground">{recipeResult.detailedAnalysis.oilAnalysis.rationale}</p>
-                          <div className="space-y-1">
-                            {renderImpactList(recipeResult.detailedAnalysis.oilAnalysis.impact)}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Fermentation Analysis */}
-                    <div className="space-y-2">
-                      <h4 className="font-medium flex items-center gap-2">
-                        <Clock className="h-4 w-4" />
-                        Fermentation Analysis
-                      </h4>
-                      <div className="text-sm space-y-2">
-                        <p className="text-muted-foreground">{recipeResult.detailedAnalysis.fermentationAnalysis.enzymaticActivity}</p>
-                        <p className="text-muted-foreground">{recipeResult.detailedAnalysis.fermentationAnalysis.gluten}</p>
-                      </div>
-                    </div>
-                  </div>
+              <CardContent className="p-0">
+                <div className="p-4 bg-primary/5">
+                  <p className="leading-relaxed text-base">{recipeResult.technicalAnalysis}</p>
                 </div>
-              </CardContent>
-            </Card>
-
-            {/* Technique Guidance Card - Full Width */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Technique Guidance</CardTitle>
-                <CardDescription>{recipeResult.adjustmentRationale}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {recipeResult.techniqueGuidance.map((guidance, index) => (
-                    <p key={index} className="text-sm text-muted-foreground flex items-start gap-2">
-                      <span className="text-primary">•</span>
-                      {guidance}
-                    </p>
-                  ))}
-                </div>
+                <DetailedAnalysis analysis={recipeResult.detailedAnalysis} />
               </CardContent>
             </Card>
           </div>
@@ -1308,5 +1335,245 @@ export function DoughCalculator() {
         )}
       </div>
     </div>
+  );
+}
+
+export function DetailedAnalysis({ analysis }: { analysis: DetailedAnalysis }) {
+  return (
+    <Tabs defaultValue="flour" className="w-full">
+      <TabsList className="grid w-full grid-cols-5">
+        <TabsTrigger value="flour" className="flex items-center gap-2">
+          <Wheat className="h-4 w-4" />
+          <span className="hidden sm:inline">Flour</span>
+        </TabsTrigger>
+        <TabsTrigger value="hydration" className="flex items-center gap-2">
+          <Droplets className="h-4 w-4" />
+          <span className="hidden sm:inline">Hydration</span>
+        </TabsTrigger>
+        <TabsTrigger value="salt" className="flex items-center gap-2">
+          <CircleDot className="h-4 w-4" />
+          <span className="hidden sm:inline">Salt</span>
+        </TabsTrigger>
+        <TabsTrigger value="fermentation" className="flex items-center gap-2">
+          <Clock className="h-4 w-4" />
+          <span className="hidden sm:inline">Fermentation</span>
+        </TabsTrigger>
+        <TabsTrigger value="oven" className="flex items-center gap-2">
+          <Utensils className="h-4 w-4" />
+          <span className="hidden sm:inline">Oven</span>
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="flour" className="mt-4 space-y-4">
+        <div className="space-y-4">
+          <div>
+            <p className="text-muted-foreground leading-relaxed">{analysis.flourAnalysis.rationale}</p>
+            {analysis.flourAnalysis.proteinContent && (
+              <div className="mt-2">
+                <Badge variant="secondary" className="text-sm">
+                  Protein Content: {analysis.flourAnalysis.proteinContent}
+                </Badge>
+              </div>
+            )}
+          </div>
+          
+          <div className="grid gap-3">
+            {analysis.flourAnalysis.flours.map((flour, index) => (
+              <div key={index} className="rounded-lg border bg-card p-3 transition-colors hover:bg-accent/10">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-primary" />
+                    <h4 className="font-medium">{flour.type}</h4>
+                  </div>
+                  <Badge variant="outline" className="bg-background">
+                    {flour.percentage}%
+                  </Badge>
+                </div>
+                {flour.proteinContent && (
+                  <div className="mb-1">
+                    <span className="text-sm text-muted-foreground">
+                      Protein Content: <span className="text-foreground">{flour.proteinContent}</span>
+                    </span>
+                  </div>
+                )}
+                <p className="text-sm text-muted-foreground">{flour.purpose}</p>
+              </div>
+            ))}
+          </div>
+          
+          {analysis.flourAnalysis.alternatives && analysis.flourAnalysis.alternatives.length > 0 && (
+            <div className="rounded-lg border bg-card/50 p-3">
+              <h4 className="font-medium mb-2">Alternative Options</h4>
+              <ul className="space-y-1">
+                {analysis.flourAnalysis.alternatives.map((alt, index) => (
+                  <li key={index} className="text-sm text-muted-foreground flex items-start gap-2">
+                    <span className="text-primary mt-1">•</span>
+                    <span>{alt}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </TabsContent>
+
+      <TabsContent value="hydration" className="mt-4 space-y-4">
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary" className="text-lg px-4 py-1">
+              {analysis.hydrationAnalysis.percentage}%
+            </Badge>
+            <span className="text-sm text-muted-foreground">hydration level</span>
+          </div>
+          
+          <p className="text-muted-foreground">{analysis.hydrationAnalysis.rationale}</p>
+          
+          <div className="rounded-lg border bg-card/50 p-3">
+            <h4 className="font-medium mb-2">Impact on Dough</h4>
+            <ul className="space-y-2">
+              {analysis.hydrationAnalysis.impact.map((impact, index) => (
+                <li key={index} className="flex items-start gap-2 text-sm">
+                  <div className="h-2 w-2 rounded-full bg-primary mt-1" />
+                  <span className="text-muted-foreground">{impact}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </TabsContent>
+
+      <TabsContent value="salt" className="mt-4 space-y-4">
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary" className="text-lg px-4 py-1">
+              {analysis.saltAnalysis.percentage}%
+            </Badge>
+            <span className="text-sm text-muted-foreground">salt level</span>
+          </div>
+          
+          <p className="text-muted-foreground">{analysis.saltAnalysis.rationale}</p>
+          
+          <div className="rounded-lg border bg-card/50 p-3">
+            <h4 className="font-medium mb-2">Impact on Development</h4>
+            <ul className="space-y-2">
+              {analysis.saltAnalysis.impact.map((impact, index) => (
+                <li key={index} className="flex items-start gap-2 text-sm">
+                  <div className="h-2 w-2 rounded-full bg-primary mt-1" />
+                  <span className="text-muted-foreground">{impact}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </TabsContent>
+
+      <TabsContent value="fermentation" className="mt-4 space-y-4">
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            {/* Room Temperature Phase */}
+            <div className="rounded-lg border bg-card p-3">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="font-medium">Room Temperature</h4>
+                <Badge variant="outline" className="bg-background">
+                  {analysis.fermentationAnalysis.roomTemp.temperature}°F
+                </Badge>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm">
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                  <span>{analysis.fermentationAnalysis.roomTemp.time} hours</span>
+                </div>
+                <ul className="space-y-1">
+                  {analysis.fermentationAnalysis.roomTemp.impact.map((impact, index) => (
+                    <li key={index} className="text-sm text-muted-foreground">
+                      {impact}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            {/* Cold Fermentation Phase */}
+            {analysis.fermentationAnalysis.coldTemp && (
+              <div className="rounded-lg border bg-card p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="font-medium">Cold Fermentation</h4>
+                  <Badge variant="outline" className="bg-background">
+                    {analysis.fermentationAnalysis.coldTemp.temperature}°F
+                  </Badge>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Clock className="h-4 w-4 text-muted-foreground" />
+                    <span>{analysis.fermentationAnalysis.coldTemp.time} hours</span>
+                  </div>
+                  <ul className="space-y-1">
+                    {analysis.fermentationAnalysis.coldTemp.impact.map((impact, index) => (
+                      <li key={index} className="text-sm text-muted-foreground">
+                        {impact}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-lg border bg-card/50 p-3">
+              <h4 className="font-medium mb-1">Enzymatic Activity</h4>
+              <p className="text-sm text-muted-foreground">
+                {analysis.fermentationAnalysis.enzymaticActivity}
+              </p>
+            </div>
+            <div className="rounded-lg border bg-card/50 p-3">
+              <h4 className="font-medium mb-1">Gluten Development</h4>
+              <p className="text-sm text-muted-foreground">
+                {analysis.fermentationAnalysis.gluten}
+              </p>
+            </div>
+          </div>
+        </div>
+      </TabsContent>
+
+      {analysis.ovenAnalysis && (
+        <TabsContent value="oven" className="mt-4 space-y-4">
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="text-lg px-4 py-1">
+                {analysis.ovenAnalysis.maxTemp}°F
+              </Badge>
+              <span className="text-muted-foreground">{analysis.ovenAnalysis.ovenType}</span>
+            </div>
+
+            <div className="grid gap-3">
+              <div className="rounded-lg border bg-card/50 p-3">
+                <h4 className="font-medium mb-2">Baking Recommendations</h4>
+                <ul className="space-y-2">
+                  {analysis.ovenAnalysis.recommendations.map((rec, index) => (
+                    <li key={index} className="flex items-start gap-2 text-sm">
+                      <div className="h-2 w-2 rounded-full bg-primary mt-1" />
+                      <span className="text-muted-foreground">{rec}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="rounded-lg border bg-card/50 p-3">
+                <h4 className="font-medium mb-2">Impact on Dough</h4>
+                <ul className="space-y-2">
+                  {analysis.ovenAnalysis.impact.map((impact, index) => (
+                    <li key={index} className="flex items-start gap-2 text-sm">
+                      <div className="h-2 w-2 rounded-full bg-primary mt-1" />
+                      <span className="text-muted-foreground">{impact}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        </TabsContent>
+      )}
+    </Tabs>
   );
 }
