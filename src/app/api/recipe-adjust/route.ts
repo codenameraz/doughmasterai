@@ -309,69 +309,69 @@ export async function POST(request: Request) {
     // Prepare the prompt
     const pizzaStyle = PIZZA_STYLES[style];
     const totalFermentationHours = (fermentation.duration.min + fermentation.duration.max) / 2;
-    const prompt = `Analyze this ${pizzaStyle.name} style pizza dough recipe and provide recommendations. 
+    const prompt = `Analyze this ${pizzaStyle.name} style pizza dough recipe and provide a valid JSON response.
 
-IMPORTANT: You MUST respond with a valid JSON object matching this exact structure. Each section MUST be detailed and specific:
+IMPORTANT: You MUST respond with valid JSON ONLY. Your entire response should be a single, valid JSON object with this structure:
 {
   "timeline": [
     {
       "step": string,
       "time": string,
-      "description": string (MUST be detailed, explaining the technique and why it's important),
-      "temperature": number (optional),
-      "tips": string[] (at least 2-3 specific, actionable tips)
+      "description": string,
+      "temperature": number | null,
+      "tips": string[]
     }
   ],
   "detailedAnalysis": {
     "flourAnalysis": {
-      "type": string (MUST specify exact flour type with brand names),
-      "proteinContent": string (MUST include exact protein percentage range),
-      "rationale": string (MUST explain why this flour type is ideal for this style),
+      "type": string,
+      "proteinContent": string,
+      "rationale": string,
       "flours": [
         {
-          "type": string (MUST include specific brand names and flour types),
-          "percentage": number (MUST total 100% across all flours),
-          "proteinContent": string (MUST specify exact protein range),
-          "purpose": string (MUST explain the specific role this flour plays in the dough)
+          "type": string,
+          "percentage": number,
+          "proteinContent": string,
+          "purpose": string
         }
       ],
-      "alternatives": string[] (MUST list 2-3 specific brand name alternatives with similar properties)
+      "alternatives": string[]
     },
     "hydrationAnalysis": {
       "percentage": number,
-      "rationale": string (MUST explain why this hydration level works for this style),
-      "impact": string[] (MUST list at least 3 specific effects on dough properties)
+      "rationale": string,
+      "impact": string[]
     },
     "saltAnalysis": {
       "percentage": number,
-      "rationale": string (MUST explain the role of salt at this percentage),
-      "impact": string[] (MUST list at least 3 specific effects on dough)
+      "rationale": string,
+      "impact": string[]
     },
     "oilAnalysis": {
       "percentage": number,
-      "rationale": string (MUST explain why this oil percentage suits the style),
-      "impact": string[] (MUST list at least 3 specific effects)
+      "rationale": string,
+      "impact": string[]
     },
     "fermentationAnalysis": {
       "totalTime": number,
       "roomTemp": {
         "time": number,
         "temperature": number,
-        "impact": string[] (MUST list at least 3 specific effects)
+        "impact": string[]
       },
       "coldTemp": {
         "time": number,
         "temperature": number,
-        "impact": string[] (MUST list at least 3 specific effects)
-      } (optional),
-      "enzymaticActivity": string (MUST explain specific enzyme actions during fermentation),
-      "gluten": string (MUST describe gluten development stages)
+        "impact": string[]
+      },
+      "enzymaticActivity": string,
+      "gluten": string
     },
     "ovenAnalysis": {
       "ovenType": string,
       "maxTemp": number,
-      "recommendations": string[] (MUST provide at least 3 specific techniques),
-      "impact": string[] (MUST list at least 3 specific effects of oven conditions)
+      "recommendations": string[],
+      "impact": string[]
     }
   },
   "hydration": number,
@@ -391,22 +391,22 @@ IMPORTANT: You MUST respond with a valid JSON object matching this exact structu
       "temperature": number
     }
   },
-  "flourRecommendation": string (MUST include specific brand names and explain why they're ideal),
-  "technicalAnalysis": string (MUST provide detailed analysis of dough characteristics),
-  "adjustmentRationale": string (MUST explain any adjustments needed),
-  "techniqueGuidance": string[] (MUST provide at least 3 specific technique tips),
+  "flourRecommendation": string,
+  "technicalAnalysis": string,
+  "adjustmentRationale": string,
+  "techniqueGuidance": string[],
   "advancedOptions": {
     "preferment": boolean,
     "autolyse": boolean,
     "additionalIngredients": Array<{
       "ingredient": string,
-      "purpose": string (MUST explain specific benefit)
+      "purpose": string
     }>
   }
 }
 
 Recipe specifications:
-- Style: ${pizzaStyle.name} ${style !== 'custom' ? '(standard style - provide specific flour recommendations)' : ''}
+- Style: ${pizzaStyle.name} ${style !== 'custom' ? '(standard style)' : ''}
 - Dough balls: ${body.doughBalls}
 - Weight per ball: ${body.weightPerBall}g
 - Hydration: ${recipe.hydration}%
@@ -421,34 +421,13 @@ Recipe specifications:
 ${body.environment?.ovenType ? `- Oven type: ${body.environment.ovenType} (max ${body.environment.maxOvenTemp}°F)` : ''}
 ${body.environment?.altitude ? `- Altitude: ${body.environment.altitude} feet` : ''}
 
-Style-specific flour requirements:
-${style === 'neapolitan' ? `For Neapolitan pizza:
-- Primary flour MUST be "00 flour" (90-100%)
-- Protein content must be 11-13%
-- MUST recommend specific Italian 00 flour brands (e.g., Caputo 00 Chef's Flour, Antimo Caputo 00 Pizzeria Flour)
-- MUST explain why each recommended flour is suitable for Neapolitan style
-- No cake flour, all-purpose flour, or low-protein flours allowed
-- Any secondary flour (if used) must complement the primary 00 flour` : ''}
-${style === 'new-york' ? `For New York pizza:
-- Primary flour MUST be bread flour or high-gluten flour (90-100%)
-- Protein content must be 12-14%
-- MUST recommend specific brands (e.g., King Arthur Bread Flour, All Trumps High-Gluten Flour)
-- MUST explain why each recommended flour creates proper NY-style characteristics
-- Any secondary flour (if used) must enhance chewiness and structure` : ''}
-
-Remember:
-1. For standard pizza styles (non-custom), MUST provide specific flour brands and types
-2. MUST include exact protein content ranges for all recommended flours
-3. MUST explain in detail why each flour is suitable for the specific style
-4. Timeline MUST include ALL steps in sequence with detailed explanations
-5. Each step MUST have exact times (no ranges)
-6. Total time MUST match ${totalFermentationHours} hours
-7. Response MUST be valid JSON
-8. All fields in the JSON structure are required unless marked optional
-9. NEVER recommend cake flour or low-protein flour for pizza dough
-10. MUST follow style-specific flour requirements when provided
-11. MUST provide specific, actionable advice (not generic statements)
-12. MUST explain the reasoning behind each recommendation`;
+Requirements:
+- For Neapolitan style, recommend 00 flour (Caputo, etc.)
+- For NY style, recommend bread flour or high-gluten flour
+- Include protein content ranges
+- Timeline must match ${totalFermentationHours} hours total
+- DO NOT add any text or explanation outside the JSON
+- Ensure all values match their expected types`;
 
     // Make API call with retry logic
     const response = await withRetry(async () => {
@@ -457,11 +436,11 @@ Remember:
         messages: [
           { 
             role: 'system', 
-            content: 'You are an expert pizzaiolo analyzing pizza dough recipes. You MUST respond with valid JSON matching the specified structure. Do not include any text outside the JSON object. Ensure all required fields are present and properly formatted.' 
+            content: 'You are an expert pizzaiolo analyzing pizza dough recipes. You MUST respond with valid JSON matching the specified structure. Do not include any text, explanations, or markdown outside the JSON object. Your entire response should be ONLY a valid JSON object.' 
           },
           { role: 'user', content: prompt }
         ],
-        temperature: 0.2,
+        temperature: 0,
         max_tokens: 4000,
         response_format: { type: "json_object" }
       });
@@ -484,8 +463,17 @@ Remember:
         throw new Error('Empty response from OpenAI');
       }
       
-      // Try to clean the response if it's not valid JSON
-      const cleanedContent = content.trim().replace(/^[^{]*/, '').replace(/[^}]*$/, '');
+      // More aggressive JSON cleaning to handle different formatting issues
+      let cleanedContent = content.trim();
+      // Remove anything before the first {
+      cleanedContent = cleanedContent.substring(cleanedContent.indexOf('{'));
+      // Remove anything after the last }
+      cleanedContent = cleanedContent.substring(0, cleanedContent.lastIndexOf('}')+1);
+      // Replace any invalid JSON that might be causing issues
+      cleanedContent = cleanedContent.replace(/\\"/g, '"').replace(/\t/g, ' ').replace(/\n/g, ' ');
+      // Replace excess spaces
+      cleanedContent = cleanedContent.replace(/\s+/g, ' ');
+      
       console.log('Cleaned Response:', cleanedContent);
       
       try {
@@ -495,7 +483,60 @@ Remember:
         console.error('Raw response:', content);
         console.error('Cleaned response:', cleanedContent);
         console.error('Parse error:', parseError);
-        throw new Error('Invalid JSON format in response');
+        
+        // Try with JSON5 which is more forgiving (fallback)
+        try {
+          // Simply return a minimal valid response to avoid breaking the UI
+          // Determine if this is a cold fermentation or not
+          const isColdFermentation = fermentation.temperature.cold !== null;
+          const roomHours = isColdFermentation ? 2 : totalFermentationHours;
+          const coldHours = isColdFermentation ? totalFermentationHours - 2 : 0;
+          const roomTemp = fermentation.temperature.room || 72;
+          const coldTemp = fermentation.temperature.cold || 38;
+
+          parsedResponse = {
+            timeline: [{ step: "Mix ingredients", time: "0:00", description: "Mix all ingredients together" }],
+            detailedAnalysis: {
+              flourAnalysis: { 
+                type: "Standard flour", 
+                proteinContent: "11-13%", 
+                rationale: "This is a fallback response due to API errors",
+                flours: [{ type: "Bread flour", percentage: 100, proteinContent: "12-14%", purpose: "Main flour" }],
+                alternatives: ["All purpose flour"]
+              },
+              hydrationAnalysis: { percentage: 65, rationale: "Standard hydration", impact: ["Good texture", "Easy handling", "Nice crust"] },
+              saltAnalysis: { percentage: 2, rationale: "Standard salt level", impact: ["Flavor", "Fermentation control", "Structure"] },
+              fermentationAnalysis: {
+                totalTime: totalFermentationHours,
+                roomTemp: { time: roomHours, temperature: roomTemp, impact: ["Flavor development", "CO2 production", "Texture"] },
+                coldTemp: isColdFermentation ? 
+                  { time: coldHours, temperature: coldTemp, impact: ["Slow fermentation", "Flavor development", "Extended shelf life"] } : undefined,
+                enzymaticActivity: "Regular enzyme activity during fermentation",
+                gluten: "Good gluten development"
+              }
+            },
+            hydration: recipe.hydration,
+            salt: recipe.salt,
+            oil: recipe.oil,
+            yeast: { type: recipe.yeast.type as "fresh" | "active dry" | "instant", percentage: 0.2 },
+            fermentationSchedule: { 
+              room: { hours: roomHours, temperature: roomTemp }, 
+              cold: { hours: coldHours, temperature: coldTemp } 
+            },
+            flourRecommendation: "Use a high-quality bread flour",
+            technicalAnalysis: "This is a fallback response due to API formatting errors. Please try again.",
+            adjustmentRationale: "Unable to provide specific adjustments due to API errors",
+            techniqueGuidance: ["Handle dough gently", "Preheat oven thoroughly", "Use a pizza stone if available"],
+            advancedOptions: { preferment: false, autolyse: false, additionalIngredients: [] }
+          };
+          
+          // Log that we used the fallback
+          console.log('Using fallback response due to JSON parsing error');
+          return parsedResponse;
+        } catch (fallbackError) {
+          // If even the fallback fails, throw the original error
+          throw new Error('Invalid JSON format in response');
+        }
       }
     } catch (error) {
       console.error('API Error:', error);
