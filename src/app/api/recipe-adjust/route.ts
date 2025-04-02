@@ -31,13 +31,13 @@ async function withRetry<T>(
 }
 
 // Define a simple model that's definitely available on OpenRouter
-const MODEL = 'anthropic/claude-2'
+const MODEL = 'mistralai/mistral-7b-instruct'
 
 // Initialize OpenRouter client with error logging
 const openai = new OpenAI({
   baseURL: 'https://openrouter.ai/api/v1',
   apiKey: process.env.OPENROUTER_API_KEY || '',
-  timeout: 55000, // 55 second timeout
+  timeout: 45000, // 45 second timeout
 })
 
 interface FermentationScheduleType {
@@ -463,7 +463,7 @@ Remember:
         ],
         temperature: 0.2,
         max_tokens: 4000,
-        response_format: { type: "text" }
+        response_format: { type: "json_object" }
       });
 
       if (!completion.choices?.[0]?.message?.content) {
