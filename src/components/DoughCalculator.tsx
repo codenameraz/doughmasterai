@@ -330,15 +330,15 @@ const calculateTimeGap = (currentTime: string, nextTime: string): string | null 
 
 export function DoughCalculator() {
   // --- State ---
-  const [doughBalls, setDoughBalls] = useState('4');
-  const [weightPerBall, setWeightPerBall] = useState('280');
-  const [selectedStyle, setSelectedStyle] = useState<PizzaStyleValue>('new-york');
+  const [doughBalls, setDoughBalls] = useState<string>('4');
+  const [weightPerBall, setWeightPerBall] = useState<string>('250');
+  const [selectedStyle, setSelectedStyle] = useState<PizzaStyleValue>('neapolitan');
   const [altitude, setAltitude] = useState('');
 
   // Ingredient Sliders
-  const [hydration, setHydration] = useState(STYLE_DEFAULTS['new-york'].hydration);
-  const [salt, setSalt] = useState(STYLE_DEFAULTS['new-york'].salt);
-  const [oil, setOil] = useState(STYLE_DEFAULTS['new-york'].oil ?? 0);
+  const [hydration, setHydration] = useState<number>(65);
+  const [salt, setSalt] = useState<number>(2.8);
+  const [oil, setOil] = useState<number>(0);
 
   // Custom Style State
   const [isCustomStyle, setIsCustomStyle] = useState(false);
@@ -348,9 +348,10 @@ export function DoughCalculator() {
   const [primaryFlourPercentage, setPrimaryFlourPercentage] = useState(100);
 
   // API State
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [recipeResult, setRecipeResult] = useState<EnhancedPizzaioloAnalysis | null>(null);
+  const [isCalculated, setIsCalculated] = useState<boolean>(false);
 
   // Add default state for missing API fields
   const [defaultYeastType] = useState<'fresh' | 'active dry' | 'instant'>('instant');
@@ -367,7 +368,7 @@ export function DoughCalculator() {
   const [autolyse, setAutolyse] = useState(false);
 
   // Add this inside the DoughCalculator component, near other state
-  const [loadingStep, setLoadingStep] = useState(0);
+  const [loadingStep, setLoadingStep] = useState<number>(0);
 
   // Add new state for tracking changes
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -484,132 +485,93 @@ export function DoughCalculator() {
 
   const handleCalculate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const numDoughBalls = parseInt(doughBalls);
-    const numWeightPerBall = parseInt(weightPerBall);
-
-    if (isNaN(numDoughBalls) || numDoughBalls <= 0 || isNaN(numWeightPerBall) || numWeightPerBall <= 0) {
-      setError("Please enter valid numbers for Dough Balls and Weight/Ball.");
-      return;
-    }
-
-    if (fermentationTime === 'custom' && !targetDate) {
-      setError("Please select a target date for custom schedule.");
-      return;
-    }
-
-    setIsLoading(true);
     setError(null);
-    setRecipeResult(null);
-    setHasUnsavedChanges(false);
-
-    // Round values to ensure consistency
-    const roundedHydration = roundToDecimal(hydration);
-    const roundedSalt = roundToDecimal(salt);
-    const roundedOil = oil > 0 ? roundToDecimal(oil) : null;
-
-    const fermentationDetails = getFermentationDetails(fermentationTime);
-    
-    // Calculate fermentation schedule based on target date for custom schedules
-    if (fermentationTime === 'custom' && targetDate) {
-      const now = new Date();
-      const totalHours = Math.ceil((targetDate.getTime() - now.getTime()) / (1000 * 60 * 60));
-      
-      if (totalHours < 4) {
-        setError("Custom schedule requires at least 4 hours of fermentation time.");
-        setIsLoading(false);
-        return;
-      }
-
-      // Determine if we should use cold fermentation based on total time
-      const useColdFerment = totalHours > 12;
-      const roomTempHours = useColdFerment ? 2 : totalHours; // Always use 2 hours room temp for cold ferment
-      const coldHours = useColdFerment ? totalHours - 2 : 0; // Remaining time goes to cold ferment
-
-      fermentationDetails.duration = {
-        min: totalHours,
-        max: totalHours
-      };
-
-      fermentationDetails.temperature = {
-        room: useColdFerment ? 75 : 72, // Slightly lower temp for longer room ferments
-        cold: useColdFerment ? 38 : null
-      };
-    }
-
-    const payload: ApiPayload = {
-      doughBalls: numDoughBalls,
-      weightPerBall: numWeightPerBall,
-      style: selectedStyle,
-      recipe: {
-        hydration: roundedHydration,
-        salt: roundedSalt,
-        oil: roundedOil,
-        flourMix: isCustomStyle && addSecondaryFlour ? {
-          primaryType: primaryFlourType,
-          secondaryType: secondaryFlourType,
-          primaryPercentage: primaryFlourPercentage
-        } : null,
-        fermentationTime: fermentationTime,
-        yeast: {
-          type: defaultYeastType
-        }
-      },
-      fermentation: {
-        schedule: fermentationTime,
-        temperature: fermentationDetails.temperature,
-        duration: fermentationDetails.duration
-      },
-      ...(altitude ? { environment: { altitude: parseInt(altitude) } } : {}),
-      analysisPreferences: {
-        detailedAnalysis: true,
-        explainRationale: true,
-        avoidGenericResponses: true,
-        requireSpecificAnalysis: true,
-        includeAutolyse: autolyse,
-        skipAutolyse: !autolyse,
-        processSteps: {
-          autolyse: autolyse,
-          initialMix: true,
-          bulkFermentation: true,
-          divideAndBall: true,
-          finalProof: true
-        }
-      }
-    };
+    setIsLoading(true);
+    setLoadingStep(0);
 
     try {
-      console.log('Sending request to API with payload:', JSON.stringify(payload, null, 2));
-      
+      const numDoughBalls = parseInt(doughBalls);
+      const numWeightPerBall = parseInt(weightPerBall);
+
+      if (isNaN(numDoughBalls) || numDoughBalls <= 0 || isNaN(numWeightPerBall) || numWeightPerBall <= 0) {
+        throw new Error("Please enter valid numbers for Dough Balls and Weight/Ball.");
+      }
+
+      const payload: ApiPayload = {
+        doughBalls: numDoughBalls,
+        weightPerBall: numWeightPerBall,
+        style: selectedStyle,
+        recipe: {
+          hydration: roundToDecimal(hydration),
+          salt: roundToDecimal(salt),
+          oil: oil > 0 ? roundToDecimal(oil) : null,
+          flourMix: isCustomStyle && addSecondaryFlour ? {
+            primaryType: primaryFlourType,
+            secondaryType: secondaryFlourType,
+            primaryPercentage: primaryFlourPercentage
+          } : null,
+          fermentationTime: fermentationTime,
+          yeast: {
+            type: 'active dry'
+          }
+        },
+        fermentation: {
+          schedule: fermentationTime,
+          temperature: getFermentationDetails(fermentationTime).temperature,
+          duration: getFermentationDetails(fermentationTime).duration
+        },
+        ...(altitude ? { environment: { altitude: parseInt(altitude) } } : {}),
+        analysisPreferences: {
+          detailedAnalysis: true,
+          explainRationale: true,
+          avoidGenericResponses: true,
+          requireSpecificAnalysis: true,
+          includeAutolyse: autolyse,
+          skipAutolyse: !autolyse,
+          processSteps: {
+            autolyse: autolyse,
+            initialMix: true,
+            bulkFermentation: true,
+            divideAndBall: true,
+            finalProof: true
+          }
+        }
+      };
+
       const response = await fetch('/api/recipe-adjust', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Accept': 'application/json'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: response.statusText }));
-        throw new Error(errorData.error || `API Error: ${response.status} - ${response.statusText}`);
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
 
-      const result = await response.json();
-      console.log('API response received:', result);
+      const data = await response.json();
       
-      // Update state with the received values
-      if (result.hydration) setHydration(roundToDecimal(result.hydration));
-      if (result.salt) setSalt(roundToDecimal(result.salt));
-      if (result.oil !== undefined) setOil(result.oil === null ? 0 : roundToDecimal(result.oil));
-      
-      // Don't set any fallback values, just use what the API returns
-      setRecipeResult(result);
+      if (!data || typeof data !== 'object') {
+        throw new Error('Invalid response format from server');
+      }
 
-    } catch (err: any) {
-      console.error("Calculation error:", err);
-      setError(err.message || 'Failed to calculate recipe. Please try again.');
+      // Handle both possible response formats
+      const analysis = data.analysis || data;
+      
+      if (!analysis || typeof analysis !== 'object') {
+        throw new Error('Missing analysis data in server response');
+      }
+
+      setRecipeResult(analysis);
+      setIsCalculated(true);
+    } catch (err) {
+      console.error('Calculation error:', err);
+      setError(err instanceof Error ? err.message : 'An unexpected error occurred. Please try again.');
     } finally {
       setIsLoading(false);
+      setLoadingStep(0);
     }
   };
 
