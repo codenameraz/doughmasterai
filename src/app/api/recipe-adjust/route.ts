@@ -31,13 +31,13 @@ async function withRetry<T>(
 }
 
 // Define a simple model that's definitely available on OpenRouter
-const MODEL = 'mistralai/mistral-7b-instruct'
+const MODEL = 'anthropic/claude-2'
 
 // Initialize OpenRouter client with error logging
 const openai = new OpenAI({
   baseURL: 'https://openrouter.ai/api/v1',
   apiKey: process.env.OPENROUTER_API_KEY || '',
-  timeout: 45000, // 45 second timeout
+  timeout: 55000, // 55 second timeout
 })
 
 interface FermentationScheduleType {
@@ -457,28 +457,30 @@ Remember:
         messages: [
           { 
             role: 'system', 
-            content: 'You are an expert pizzaiolo analyzing pizza dough recipes. You MUST respond with valid JSON matching the specified structure. Do not include any text outside the JSON object.' 
+            content: 'You are an expert pizzaiolo analyzing pizza dough recipes. You MUST respond with valid JSON matching the specified structure. Do not include any text outside the JSON object. Ensure all required fields are present and properly formatted.' 
           },
           { role: 'user', content: prompt }
         ],
-        temperature: 0.7,
-        max_tokens: 2000,
-        response_format: { type: "json_object" }
+        temperature: 0.2,
+        max_tokens: 4000,
+        response_format: { type: "text" }
       });
 
-      if (!completion.choices[0]?.message?.content) {
+      if (!completion.choices?.[0]?.message?.content) {
+        console.error('OpenRouter Response:', completion);
         throw new Error('No response from OpenAI');
       }
 
       console.log('Raw OpenAI Response:', completion.choices[0].message.content);
       return completion;
-    });
+    }, 3, 2000);
 
     // Parse OpenAI response with better error handling
     let parsedResponse: EnhancedPizzaioloAnalysis;
     try {
       const content = response.choices[0].message.content;
       if (!content) {
+        console.error('Empty Response Object:', response);
         throw new Error('Empty response from OpenAI');
       }
       
@@ -496,9 +498,63 @@ Remember:
         throw new Error('Invalid JSON format in response');
       }
     } catch (error) {
-      console.error('Error parsing OpenAI response:', error);
+      console.error('API Error:', error);
+      console.error('API Error Stack:', error instanceof Error ? error.stack : 'No stack trace');
+      console.error('API Error Details:', {
+        errorType: error instanceof Error ? error.constructor.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+        model: MODEL,
+        timestamp: new Date().toISOString()
+      });
+
+      // Check if error is related to model availability
+      if (error instanceof Error && 
+          (error.message.includes('model') || 
+           error.message.includes('unavailable') || 
+           error.message.includes('quota'))) {
+        console.error('Model availability error, falling back to alternative model');
+        // You could implement model fallback here if needed
+        return NextResponse.json(
+          { error: 'The service is temporarily unavailable. Please try again in a few minutes.' },
+          { status: 503 }
+        );
+      }
+      
+      // Handle specific error types
+      if (error instanceof Error) {
+        if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) {
+          console.error('Timeout Error Details:', {
+            timeout: openai.timeout,
+            errorMessage: error.message
+          });
+          return NextResponse.json(
+            { error: 'Request timed out. Please try again.' },
+            { status: 504 }
+          );
+        }
+        
+        if (error.message.includes('rate limit')) {
+          console.error('Rate Limit Error:', error.message);
+          return NextResponse.json(
+            { error: 'Service is busy. Please try again in a few minutes.' },
+            { status: 429 }
+          );
+        }
+      }
+
+      // Log unexpected errors
+      console.error('Unexpected Error:', {
+        error: error instanceof Error ? error.message : String(error),
+        type: error instanceof Error ? error.constructor.name : typeof error,
+        timestamp: new Date().toISOString()
+      });
+
+      // Generic error response
       return NextResponse.json(
-        { error: 'Error processing the recipe. The AI response was not in the correct format. Please try again.' },
+        { 
+          error: 'An unexpected error occurred. Please try again.',
+          errorId: new Date().getTime().toString(36) // Add an error ID for tracking
+        },
         { status: 500 }
       );
     }
@@ -520,10 +576,21 @@ Remember:
 
   } catch (error) {
     console.error('API Error:', error);
+    console.error('API Error Stack:', error instanceof Error ? error.stack : 'No stack trace');
+    console.error('API Error Details:', {
+      errorType: error instanceof Error ? error.constructor.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+      model: MODEL,
+      timestamp: new Date().toISOString()
+    });
     
     // Handle specific error types
     if (error instanceof Error) {
       if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) {
+        console.error('Timeout Error Details:', {
+          timeout: openai.timeout,
+          errorMessage: error.message
+        });
         return NextResponse.json(
           { error: 'Request timed out. Please try again.' },
           { status: 504 }
@@ -531,6 +598,7 @@ Remember:
       }
       
       if (error.message.includes('rate limit')) {
+        console.error('Rate Limit Error:', error.message);
         return NextResponse.json(
           { error: 'Service is busy. Please try again in a few minutes.' },
           { status: 429 }
@@ -538,9 +606,19 @@ Remember:
       }
     }
 
+    // Log unexpected errors
+    console.error('Unexpected Error:', {
+      error: error instanceof Error ? error.message : String(error),
+      type: error instanceof Error ? error.constructor.name : typeof error,
+      timestamp: new Date().toISOString()
+    });
+
     // Generic error response
     return NextResponse.json(
-      { error: 'An unexpected error occurred. Please try again.' },
+      { 
+        error: 'An unexpected error occurred. Please try again.',
+        errorId: new Date().getTime().toString(36) // Add an error ID for tracking
+      },
       { status: 500 }
     );
   }
