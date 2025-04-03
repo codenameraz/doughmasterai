@@ -16,7 +16,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Loader2, AlertCircle, ChefHat, Percent, Scale, Droplet, Utensils, Clock, ChevronDown, Wheat, CircleDot, Droplets } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatPrice, trackEvent } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar } from "@/components/ui/calendar"
 import { format } from "date-fns"
@@ -663,9 +663,26 @@ export function DoughCalculator() {
 
       setRecipeResult(analysis);
       setIsCalculated(true);
+      
+      // Track successful calculation in Google Analytics
+      trackEvent('recipe_calculated', {
+        style: selectedStyle,
+        fermentation_time: fermentationTime,
+        oven_type: ovenType,
+        dough_balls: numDoughBalls,
+        hydration: roundToDecimal(hydration),
+        has_secondary_flour: isCustomStyle && addSecondaryFlour
+      });
     } catch (err) {
       console.error('Calculation error:', err);
       setError(err instanceof Error ? err.message : 'An unexpected error occurred. Please try again.');
+      
+      // Track error in Google Analytics
+      trackEvent('recipe_calculation_error', {
+        error_message: err instanceof Error ? err.message : 'Unknown error',
+        style: selectedStyle,
+        fermentation_time: fermentationTime
+      });
     } finally {
       setIsLoading(false);
       setLoadingStep(0);
@@ -751,6 +768,7 @@ export function DoughCalculator() {
                       onValueChange={(v) => {
                         setSelectedStyle(v as PizzaStyleValue);
                         resetState();
+                        trackEvent('style_selected', { style: v });
                       }}
                       required
                     >
@@ -773,6 +791,10 @@ export function DoughCalculator() {
                       onValueChange={(v) => {
                         setFermentationTime(v as FermentationType);
                         resetState(); // Explicitly reset state when changing fermentation type
+                        trackEvent('fermentation_selected', { 
+                          fermentation_time: v,
+                          style: selectedStyle
+                        });
                       }}
                     >
                       <SelectTrigger className="relative bg-background h-10">

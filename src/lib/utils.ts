@@ -29,3 +29,12 @@ export function formatPrice(
     notation,
   }).format(price)
 }
+
+/**
+ * Send a Google Analytics event
+ */
+export function trackEvent(eventName: string, eventParams?: Record<string, any>) {
+  if (typeof window !== 'undefined' && typeof (window as any).gtag === 'function') {
+    (window as any).gtag('event', eventName, eventParams);
+  }
+}

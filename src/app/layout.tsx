@@ -6,6 +6,7 @@ import "./globals.css"
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import { Toaster } from "@/components/ui/toaster";
+import Script from "next/script";
 
 const fontSans = FontSans({
   subsets: ["latin"],
@@ -56,6 +57,19 @@ export default function RootLayout({
         fontSans.variable
         // fontHeading usage completely removed
       )}>
+        {/* Google Analytics */}
+        <Script
+          src="https://www.googletagmanager.com/gtag/js?id=G-3JVRX701MR"
+          strategy="afterInteractive"
+        />
+        <Script id="google-analytics" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+            gtag('config', 'G-3JVRX701MR');
+          `}
+        </Script>
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
