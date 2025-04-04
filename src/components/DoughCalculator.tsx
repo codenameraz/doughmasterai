@@ -568,8 +568,8 @@ export function DoughCalculator() {
   // Update state section
   const [yeastType, setYeastType] = useState<'IDY' | 'ADY' | 'fresh'>('IDY');
   const [customYeastPercentage, setCustomYeastPercentage] = useState<string>('');
-  const [roomTemp, setRoomTemp] = useState<string>('22');
-  const [tempUnit, setTempUnit] = useState<'C' | 'F'>('C');
+  const [roomTemp, setRoomTemp] = useState<string>('72'); // Default to 72°F
+  const [tempUnit, setTempUnit] = useState<'C' | 'F'>('F'); // Default to Fahrenheit
 
   // --- Effects ---
   useEffect(() => {
@@ -1642,32 +1642,32 @@ export function DoughCalculator() {
                   <div className="space-y-8">
                     {/* Analysis Tabs */}
                     <Tabs defaultValue="flour" className="w-full">
-                      <TabsList className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 mb-4"> {/* Responsive grid */}
-                        <TabsTrigger value="flour" className="text-xs">
+                      <TabsList className="mb-4"> {/* Removed grid classes, allow flex wrap */}
+                        <TabsTrigger value="flour" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
                           <Wheat className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Flour</span>
                         </TabsTrigger>
-                        <TabsTrigger value="hydration" className="text-xs">
+                        <TabsTrigger value="hydration" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
                           <Droplets className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Hydration</span>
                         </TabsTrigger>
-                        <TabsTrigger value="salt" className="text-xs">
+                        <TabsTrigger value="salt" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
                           <CircleDot className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Salt</span>
                         </TabsTrigger>
-                        <TabsTrigger value="yeast" className="text-xs">
+                        <TabsTrigger value="yeast" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
                           <Beaker className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Yeast</span>
                         </TabsTrigger>
-                        <TabsTrigger value="temperature" className="text-xs">
+                        <TabsTrigger value="temperature" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
                           <Thermometer className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Temperature</span>
                         </TabsTrigger>
-                        <TabsTrigger value="fermentation" className="text-xs">
+                        <TabsTrigger value="fermentation" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
                           <Clock className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Fermentation</span>
                         </TabsTrigger>
-                        <TabsTrigger value="technique" className="text-xs">
+                        <TabsTrigger value="technique" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
                           <Utensils className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Technique</span>
                         </TabsTrigger>
