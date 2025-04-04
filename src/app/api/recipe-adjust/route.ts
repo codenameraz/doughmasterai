@@ -261,6 +261,11 @@ Analyze this ${style} pizza dough recipe:
 - Oil: ${recipe.oil !== null ? recipe.oil + '%' : 'none'}
 - Yeast: ${recipe.yeast.type}
 - Total Dough: ${recipe.doughBalls} x ${recipe.weightPerBall}g
+${style === 'custom' && recipe.flourMix ? 
+`- Custom Flour Mix:
+  - Primary: ${recipe.flourMix.primaryType} (${recipe.flourMix.primaryPercentage}%)
+  - Secondary: ${recipe.flourMix.secondaryType || 'None'} (${recipe.flourMix.secondaryType ? 100 - recipe.flourMix.primaryPercentage : 0}%)
+` : ''}
 
 ## Input Fermentation Schedule
 - Type: ${fermentation.schedule}
@@ -321,24 +326,25 @@ Provide analysis in this simplified JSON structure:
   },
   "yeastRecommendation": {
     "type": "string (fresh, active dry, or instant)",
-    "percentage": number (MUST calculate based on fermentation time/temp/type...),
-    "rationale": "string explaining why THIS calculated amount/type is appropriate for ${style} style, THIS fermentation schedule, and input temperature",
+    "percentage": number (CRITICAL: MUST calculate dynamically based on fermentation schedule type, duration, and temperature. Use LESS yeast (0.1-0.3%) for longer/colder fermentations (e.g., cold, overnight) and MORE yeast (0.4-0.8%) for shorter/warmer fermentations (e.g., quick, same-day). Apply this logic carefully to custom schedules too, using the provided duration/temp values.),
+    "rationale": "string explaining why THIS calculated amount/type is appropriate for the SPECIFIC fermentation schedule (time/temp) and input yeast type. Explain the yeast percentage calculation logic.",
     "impact": ["string describing effect of THIS yeast amount/type on fermentation speed/flavor"],
     "temperatureNotes": ["string noting specific temperature considerations for THIS yeast type/amount"]
   },
   "flourRecommendation": {
     "primaryFlour": {
-      "name": "string specifying exact flour brand/type from the AUTHENTIC options for ${style} style (e.g., '${styleData.idealFlours[0]}' for ${style})",
-      "proteinPercentage": number,
-      "purpose": "string explaining why THIS RECOMMENDED flour works well for ${style} style",
-      "authenticityScore": number (0-10, where 10 means perfectly authentic for ${style} style), // Keep score internally but don't show in UI
-      "authenticity": "string explaining why this flour is authentic for ${style} style"
+      "name": "string. FOR CUSTOM STYLE: Use the EXACT primary flour name from the input Custom Flour Mix (e.g., '${recipe.flourMix?.primaryType}'). DO NOT recommend a different flour.",
+      "proteinPercentage": number (Estimate based on the flour type if not known),
+      "purpose": "string explaining the role of THIS specific primary flour in the context of the ${style} style. FOR CUSTOM STYLE: analyze the provided '${recipe.flourMix?.primaryType}' and how it contributes to the custom blend's properties (strength, texture, etc.) based on its typical characteristics.",
+      "authenticityScore": 0, // Force 0 for custom style
+      "authenticity": "string. FOR CUSTOM STYLE: State 'N/A - Custom Blend' or explain suitability based *only* on the user's provided flours, ignoring standard style rules."
     },
     "alternativeFlours": [
+      // FOR CUSTOM STYLE: If a secondary flour ('${recipe.flourMix?.secondaryType}') is provided in the input, include ONLY that flour here with its details and mix ratio ('${recipe.flourMix?.secondaryType ? 100 - (recipe.flourMix?.primaryPercentage || 0) : 0}%'). Otherwise, this MUST be an EMPTY array []. DO NOT SUGGEST ANY OTHER ALTERNATIVES FOR CUSTOM STYLE.
       {
-        "name": "string (MUST BE AUTHENTIC FOR ${style.toUpperCase()} STYLE)",
-        "proteinPercentage": number (MUST BE WITHIN ${styleData.proteinRange[0]}-${styleData.proteinRange[1]}%),
-        "mixRatio": number (0-100 representing percentage of total flour, only if applicable)
+        "name": "string (FOR CUSTOM: MUST be '${recipe.flourMix?.secondaryType || 'None'}')",
+        "proteinPercentage": number (Estimate based on the flour type),
+        "mixRatio": number (FOR CUSTOM: MUST be ${recipe.flourMix?.secondaryType ? 100 - (recipe.flourMix?.primaryPercentage || 0) : 0})
       }
     ]
   },
@@ -384,10 +390,10 @@ Provide analysis in this simplified JSON structure:
 }
 
 IMPORTANT INSTRUCTIONS:
-1. Flour Analysis Focus: Your analysis in flourRecommendation.primaryFlour.purpose must explain why the specific flour *you are recommending* in primaryFlour.name is suitable for the ${style} style. DO NOT analyze or mention the user's input flour here.
+1. Flour Analysis Focus: Your analysis in flourRecommendation.primaryFlour.purpose must explain why the specific flour *you are recommending* in primaryFlour.name is suitable for the ${style} style. DO NOT analyze or mention the user's input flour here. **FOR CUSTOM STYLE**: If a custom flour mix is provided in the input, base your analysis and recommendations (primaryFlour, alternativeFlours) on the properties of THAT specific mix (e.g., ${recipe.flourMix?.primaryType}, ${recipe.flourMix?.secondaryType}).
 2. Timeline Generation: The timeline should be user-friendly and easy to follow, like a recipe. Each step should have clear instructions that a home baker can easily understand. Use day numbers (Day 1 = calculation day). Use specific times (e.g., '9:00 AM', '6:00 PM') based on the fermentation schedule where possible, or fallback to 'Morning', 'Afternoon', 'Evening'. Ensure timings logically follow the fermentation schedule. IMPORTANT: For cold fermentation, EXPLICITLY include a refrigeration step in the timeline with clear instructions on when to place the dough in the refrigerator and when to remove it. This should be a distinct timeline step with its own title like "Refrigerate the dough" and detailed instructions. Example refrigeration step format: { "day": 1, "timeOfDay": "Evening", "title": "Refrigerate the dough", "instructions": "Transfer the dough to a container and place in the refrigerator at 4°C", "duration": "5 minutes", "tips": ["Use an airtight container", "Ensure your refrigerator is at 3-5°C"] }. Similarly, include a removal step when it's time to take the dough out of the refrigerator.
 3. JSON Validity: Ensure the entire output is a single, valid JSON object conforming to the structure above. Pay attention to commas, quotes, and types. All percentages must be numbers (e.g., 65, not "65%"). All temperatures in Celsius.
-4. **Strictest Flour Authenticity**: For Neapolitan style, you MUST recommend Italian 00 flour (like Caputo) AND ABSOLUTELY NO American bread flour alternatives. For New York style, you MUST recommend American high-protein bread flour AND ABSOLUTELY NO Italian 00 flour alternatives. For ALL styles, ONLY recommend alternative flours that meet the authentic criteria (origin, protein, characteristics). If no authentic alternatives exist, provide an empty \`alternativeFlours\` array. DO NOT COMPROMISE ON AUTHENTICITY, EVEN FOR ALTERNATIVES.
+4. **Strictest Flour Authenticity**: For Neapolitan style, you MUST recommend Italian 00 flour (like Caputo) AND ABSOLUTELY NO American bread flour alternatives. For New York style, you MUST recommend American high-protein bread flour AND ABSOLUTELY NO Italian 00 flour alternatives. For ALL styles (except CUSTOM), ONLY recommend alternative flours that meet the authentic criteria (origin, protein, characteristics). If no authentic alternatives exist, provide an empty \`alternativeFlours\` array. DO NOT COMPROMISE ON AUTHENTICITY, EVEN FOR ALTERNATIVES. **For CUSTOM STYLE, disregard authenticity constraints and focus on suitability for the provided mix.**
 5. **Detailed Temperature Rationale**: In the \`temperatureAnalysis.rationale\`, specifically mention the original user-provided room temperature (${originalRoomTempDisplay}) AND **provide a detailed scientific explanation of HOW this temperature impacts** the fermentation speed, yeast activity, and gluten development for THIS recipe, referencing the Celsius value (${environment.roomTemp}°C). Avoid generic statements like 'Affects fermentation rate and dough development'. Explain *how* it affects it.
 
 Verify these accuracy markers AFTER generating your recommendation:
@@ -471,6 +477,10 @@ function cleanResponse(content: string): string {
     
     // Extract just the JSON part and trim any whitespace
     let jsonStr = content.slice(jsonStart, jsonEnd + 1).trim();
+
+    // Remove comments (single-line and multi-line)
+    jsonStr = jsonStr.replace(/\/\/.*$/gm, '')         // Remove single-line comments (// ...)
+                     .replace(/\/\*[\s\S]*?\*\//g, ''); // Remove multi-line comments (/* ... */)
     
     // Remove any trailing content after the last closing brace
     jsonStr = jsonStr.replace(/}[^}]*$/, '}');
@@ -758,7 +768,8 @@ export async function POST(request: Request) {
         hydration: data.recipe.hydration,
         salt: data.recipe.salt,
         oil: data.recipe.oil,
-        yeast: data.recipe.yeast
+        yeast: data.recipe.yeast,
+        flourMix: data.recipe.flourMix
       },
       data.fermentation,
       data.environment
@@ -789,12 +800,19 @@ export async function POST(request: Request) {
 
     // Clean and validate the response
     const cleanedResponse = cleanResponse(completion.choices[0].message.content);
-    console.log('Cleaned response:', cleanedResponse);
+    // Log the cleaned response (which should be JSON string) - already stringified by cleanResponse
+    try {
+      // Attempt to parse and re-stringify for pretty printing
+      console.log('Cleaned response (pretty-printed):', JSON.stringify(JSON.parse(cleanedResponse), null, 2));
+    } catch (e) {
+      // If parsing fails, log the raw string
+      console.log('Cleaned response (raw string):', cleanedResponse);
+    }
     
     const result = JSON.parse(cleanedResponse);
 
     if (!validateResponse(result)) {
-      console.error('Response validation failed:', JSON.stringify(result, null, 2));
+      console.error('Response validation failed:', JSON.stringify(result, null, 2)); // Already pretty-printed
       throw new Error('Invalid response structure');
     }
 
