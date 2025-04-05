@@ -7,6 +7,8 @@ import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import { Toaster } from "@/components/ui/toaster";
 import Script from "next/script";
+import { Analytics } from "@vercel/analytics/react"
+
 
 const fontSans = FontSans({
   subsets: ["latin"],
@@ -83,6 +85,7 @@ export default function RootLayout({
           </main>
           <Footer /> {/* Restore Footer */}
           <Toaster />
+          <Analytics />
         </ThemeProvider>
       </body>
     </html>
