@@ -27,7 +27,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar"
 import { format } from "date-fns"
 import { Calendar as CalendarIcon } from "lucide-react"
-import { NewsletterSubscribe } from "@/components/NewsletterSubscribe";
 import {
   Collapsible,
   CollapsibleContent,
@@ -36,7 +35,6 @@ import {
 import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { DetailedAnalysis } from "@/components/DetailedAnalysis"
 
 // --- Interfaces ---
 interface YeastInfo { type: "fresh" | "active dry" | "instant"; percentage: number; }
@@ -95,12 +93,12 @@ interface ApiPayload {
             primaryType: string;
             secondaryType?: string;
             primaryPercentage: number;
-        } | null;
-        fermentationTime: string;
+        } | null,
+        fermentationTime: string,
         yeast: {
             type: string;
-        };
-    };
+        }
+    },
     fermentation: {
         schedule: string;
         temperature: {
@@ -111,14 +109,14 @@ interface ApiPayload {
             min: number;
             max: number;
         };
-    };
+    },
     environment?: {
         altitude?: number;
         ovenType?: 'home' | 'outdoor';
         maxOvenTemp?: number;
         roomTemp: number; // This is tempInCelsius
         tempUnit?: 'C' | 'F'; // Added tempUnit
-    };
+    },
     analysisPreferences: {
         detailedAnalysis: boolean;
         explainRationale: boolean;
@@ -147,10 +145,8 @@ interface Timeline {
 
 interface TemperatureAnalysis {
     roomTemp: number;
-    season: string;
-    impact: string[];
-    recommendations: string[];
     rationale: string;
+    recommendations?: string[];
 }
 
 interface FermentationStep {
@@ -174,6 +170,8 @@ interface TechniqueGuidance {
     handling: string;
     shaping: string;
     baking: string;
+    mixing: string;
+    folding: string;
 }
 
 interface DetailedAnalysis {
@@ -215,21 +213,20 @@ interface RecipeAnalysis {
 }
 
 interface FermentationSchedule {
-    totalHours: number;
-    room: {
-        hours: number;
-        tempC: number;
-        indicators: string[];
-    };
-    cold: {
-        hours: number;
-        tempC: number | null;
-        indicators: string[];
-    };
+    totalTime: number;
+    type: string;
     rationale: string;
-    // Added optional fields to match prompt structure
-    type?: string; 
-    impact?: string[]; 
+    impact: string[];
+    roomTemp: {
+        time: number;
+        temperature: number;
+        impact: string[];
+    };
+    coldTemp?: {
+        time: number;
+        temperature: number;
+        impact: string[];
+    };
     recommendations?: string[];
 }
 
@@ -305,6 +302,71 @@ interface FermentationScheduleConfig {
     description: string;
 }
 
+interface FlourRecommendation {
+  primary: {
+    name: string;
+    protein: string;
+    description: string;
+  };
+  alternatives: Array<{
+    name: string;
+    protein: string;
+    description: string;
+  }>;
+}
+
+interface ProcessTimelineStep {
+  step: number;
+  description: string;
+  duration: string;
+  temperature: string | null;
+  isRefrigeration: boolean;
+  tips?: string[];
+}
+
+interface ProcessTimeline {
+  steps: ProcessTimelineStep[];
+}
+
+interface Recommendation {
+  percentage: number;
+  rationale: string;
+  impact: string[];
+  recommendations?: string[];
+}
+
+interface ApiResponse {
+  flourRecommendation: FlourRecommendation;
+  processTimeline: ProcessTimeline;
+  temperatureAnalysis: TemperatureAnalysis;
+  timeline: Timeline[];
+  techniqueGuidance: string[];
+  detailedAnalysis: DetailedAnalysis;
+  recipe?: {
+    flourMix?: {
+      primaryType: string;
+      secondaryType?: string;
+      primaryPercentage: number;
+    };
+  };
+  hydrationRecommendation?: Recommendation;
+  saltRecommendation?: Recommendation;
+  yeastRecommendation?: Recommendation & {
+    type: string;
+    temperatureNotes?: string[];
+  };
+  fermentationSchedule?: FermentationSchedule;
+  techniques?: {
+    kneading?: string[];
+    shaping?: string[];
+    baking?: string[];
+    general?: string[];
+  };
+}
+
+// Update the RecipeResult type
+type RecipeResult = ApiResponse;
+
 // --- End Interfaces ---
 
 // --- Constants ---
@@ -321,19 +383,47 @@ type PizzaStyleValue = typeof PIZZA_STYLE_OPTIONS[number]['value'];
 const FLOUR_TYPES = ['00 Flour', 'Bread Flour', 'All-Purpose', 'High Gluten', 'Whole Wheat', 'Semolina', 'Rye'] as const;
 type FlourType = typeof FLOUR_TYPES[number];
 
-const STYLE_DEFAULTS: Record<Exclude<PizzaStyleValue, 'custom'>, { hydration: number; salt: number; oil: number | null }> = {
-  'neapolitan': { hydration: 65, salt: 2.8, oil: 0 },
-  'new-york': { hydration: 62, salt: 2.5, oil: 2 },
-  'detroit': { hydration: 70, salt: 2.0, oil: 3 },
-  'sicilian': { hydration: 68, salt: 2.5, oil: 4 },
-  'roman-al-taglio': { hydration: 75, salt: 2.2, oil: 5 },
+const STYLE_DEFAULTS: Record<Exclude<PizzaStyleValue, 'custom'>, {
+  hydration: {
+    home: number;
+    outdoor: number;
+  };
+  salt: number;
+  oil: number | null;
+}> = {
+  'neapolitan': {
+    hydration: { home: 65, outdoor: 60 },
+    salt: 2.8,
+    oil: 0
+  },
+  'new-york': {
+    hydration: { home: 63, outdoor: 58 },
+    salt: 2.5,
+    oil: 2
+  },
+  'detroit': {
+    hydration: { home: 70, outdoor: 68 },
+    salt: 2.0,
+    oil: 3
+  },
+  'sicilian': {
+    hydration: { home: 68, outdoor: 65 },
+    salt: 2.5,
+    oil: 4
+  },
+  'roman-al-taglio': {
+    hydration: { home: 75, outdoor: 72 },
+    salt: 2.2,
+    oil: 5
+  }
 };
-const CUSTOM_DEFAULTS = { hydration: 65, salt: 2.5, oil: 2 };
+
+const CUSTOM_DEFAULTS = { hydration: { home: 65, outdoor: 62 }, salt: 2.5, oil: 2 };
 
 const FERMENTATION_OPTIONS = [
     { value: 'quick', label: 'Quick (2-4 hours)', description: 'Room temperature fermentation for same-day pizza' },
     { value: 'same-day', label: 'Same Day (8-12 hours)', description: 'Longer room temperature fermentation for better flavor' },
-    { value: 'overnight', label: 'Overnight (16-20 hours)', description: 'Mixed fermentation with room temp and cold phases' },
+    { value: 'overnight', label: 'Overnight (16-20 hours)', description: 'Extended room temperature fermentation for deep flavor development' },
     { value: 'cold', label: 'Cold Ferment (24-72 hours)', description: 'Extended cold fermentation for maximum flavor development' },
     { value: 'custom', label: 'Custom Schedule', description: 'Define your own fermentation schedule' },
 ] as const;
@@ -545,7 +635,7 @@ export function DoughCalculator() {
   // API State
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [recipeResult, setRecipeResult] = useState<EnhancedPizzaioloAnalysis | null>(null);
+  const [recipeResult, setRecipeResult] = useState<ApiResponse | null>(null);
   const [isCalculated, setIsCalculated] = useState<boolean>(false);
 
   // Add default state for missing API fields
@@ -582,11 +672,11 @@ export function DoughCalculator() {
     if (!isCustom) {
       if (selectedStyle in STYLE_DEFAULTS) {
           const defaults = STYLE_DEFAULTS[selectedStyle as Exclude<PizzaStyleValue, 'custom'>];
-          setHydration(defaults.hydration);
+          setHydration(defaults.hydration[ovenType]);
           setSalt(defaults.salt);
           setOil(defaults.oil ?? 0);
       } else {
-          setHydration(CUSTOM_DEFAULTS.hydration);
+          setHydration(CUSTOM_DEFAULTS.hydration[ovenType]);
           setSalt(CUSTOM_DEFAULTS.salt);
           setOil(CUSTOM_DEFAULTS.oil);
       }
@@ -594,7 +684,7 @@ export function DoughCalculator() {
         setAddSecondaryFlour(false);
       setPrimaryFlourPercentage(100);
     }
-  }, [selectedStyle]);
+  }, [selectedStyle, ovenType]);
 
   // Update fermentation time effect to completely destroy and recreate state
   useEffect(() => {
@@ -681,26 +771,26 @@ export function DoughCalculator() {
       },
       'overnight': {
         duration: { min: 16, max: 20 },
-        temperature: { room: 22, cold: 4 },
-        description: 'Mixed fermentation with both room and cold temperatures'
+        temperature: { room: 22, cold: null },
+        description: 'Long room temperature fermentation for maximum flavor development'
       },
       'cold': {
         duration: { min: 24, max: 72 },
-        temperature: { room: null, cold: 4 },
-        description: 'Long cold fermentation for complex flavor development'
+        temperature: { room: 22, cold: 4 },
+        description: 'Extended cold fermentation for complex flavor development'
       },
       'custom': {
         duration: { min: 4, max: 72 },
-        temperature: { room: 22, cold: 4 },
+        temperature: { room: 22, cold: null },
         description: 'Custom fermentation schedule'
       }
     };
     return defaultSchedules[schedule];
   };
 
-  // Add this helper function to determine if cold fermentation is being used
+  // Update the isColdFermentation helper to only return true for cold fermentation
   const isColdFermentation = (schedule: FermentationType) => {
-    return schedule === 'cold' || schedule === 'overnight';
+    return schedule === 'cold';
   };
 
   // Update the handleCalculate function to include oven type
@@ -740,12 +830,13 @@ export function DoughCalculator() {
 
       const selectedOvenType = OVEN_TYPES[ovenType];
       
-      // Convert temperature to Celsius if needed
-      const tempInCelsius = tempUnit === 'F' 
-        ? Math.round((parseFloat(roomTemp) - 32) * 5 / 9 * 10) / 10
-        : parseFloat(roomTemp);
+      // Remove temperature conversion - send temperature as-is
+      const currentTemp = parseFloat(roomTemp);
+      if (isNaN(currentTemp)) {
+        throw new Error("Please enter a valid room temperature.");
+      }
 
-    const fermentationDetails = getFermentationDetails(fermentationTime);
+      const fermentationDetails = getFermentationDetails(fermentationTime);
       const usesColdFermentation = isColdFermentation(fermentationTime);
 
         const payload: ApiPayload = {
@@ -769,7 +860,7 @@ export function DoughCalculator() {
             fermentation: {
                 schedule: fermentationTime,
           temperature: {
-            room: usesColdFermentation ? tempInCelsius : fermentationDetails.temperature.room,
+            room: usesColdFermentation ? currentTemp : fermentationDetails.temperature.room,
             cold: usesColdFermentation ? fermentationDetails.temperature.cold : null
           },
           duration: fermentationDetails.duration
@@ -778,8 +869,8 @@ export function DoughCalculator() {
           ...(altitude ? { altitude: parseInt(altitude) } : {}),
           ovenType: ovenType,
           maxOvenTemp: selectedOvenType?.maxTemp,
-          roomTemp: tempInCelsius, // Keep sending Celsius for API internal use
-          tempUnit: tempUnit // Send the original unit
+          roomTemp: currentTemp,
+          tempUnit: tempUnit
         },
             analysisPreferences: {
                 detailedAnalysis: true,
@@ -822,132 +913,116 @@ export function DoughCalculator() {
         throw new Error('Invalid response format from API');
       }
 
-      // Ensure yeast percentage is correctly handled
-      const yeastPercentage = data.detailedAnalysis?.yeastAnalysis?.percentage || 
-                             (data.yeast?.percentage !== undefined ? data.yeast.percentage : 0.2);
-
-      // Ensure hydration percentage is correctly handled
-      const hydrationPercentage = data.detailedAnalysis?.hydrationAnalysis?.percentage ||
-                                 (data.hydration !== undefined ? data.hydration : hydration);
-
-      // Ensure salt percentage is correctly handled
-      const saltPercentage = data.detailedAnalysis?.saltAnalysis?.percentage ||
-                              (data.salt !== undefined ? data.salt : salt);
-
-      // Ensure oil percentage is correctly handled
-      const oilPercentage = data.detailedAnalysis?.oilAnalysis?.percentage ||
-                             (data.oil !== undefined ? data.oil : oil);
-
-      console.log('Processed percentages:', {
-        hydration: hydrationPercentage,
-        salt: saltPercentage,
-        yeast: yeastPercentage,
-        oil: oilPercentage
-      });
-
-      // Ensure compatibility with UI components
+      // Ensure all sections are properly populated
       const processedData = {
         ...data,
-        hydration: data.hydration || data.detailedAnalysis?.hydrationAnalysis?.percentage || hydration,
-        salt: data.salt || data.detailedAnalysis?.saltAnalysis?.percentage || salt,
-        oil: data.oil || data.detailedAnalysis?.oilAnalysis?.percentage || oil,
-        yeast: {
-          ...data.yeast,
-          percentage: data.yeast?.percentage || data.detailedAnalysis?.yeastAnalysis?.percentage || 0.2,
-          type: data.yeast?.type || yeastType,
-          impact: data.yeast?.impact || []
-        },
-        // Map temperatureAnalysis from the root API response
+        // Copy temperature analysis directly from root or use default
         temperatureAnalysis: data.temperatureAnalysis || {
-          roomTempC: parseFloat(roomTemp),
-          season: "Standard",
-          rationale: "Affects fermentation rate and dough development.",
-          impact: ["Higher temperatures speed up fermentation", "Lower temperatures slow down fermentation"],
-          recommendations: ["Adjust fermentation time based on room temperature", "Consider using colder water in warm environments"]
+          roomTemp: parseFloat(roomTemp),
+          rationale: "Temperature affects fermentation rate and dough development.",
+          recommendations: ["Monitor your room temperature", "Adjust fermentation time accordingly"]
         },
+        
+        // Ensure all detailed analysis sections exist and have proper content
         detailedAnalysis: {
           ...data.detailedAnalysis,
+          
+          // Handle flour analysis
           flourAnalysis: {
             ...data.detailedAnalysis?.flourAnalysis,
-            type: data.detailedAnalysis?.flourAnalysis?.type || primaryFlourType,
-            proteinContent: data.detailedAnalysis?.flourAnalysis?.proteinContent || "Unknown",
-            rationale: data.detailedAnalysis?.flourAnalysis?.rationale || "Selection based on protein content and gluten quality appropriate for this style.",
-            alternatives: Array.isArray(data.detailedAnalysis?.flourAnalysis?.alternatives) 
-              ? data.detailedAnalysis.flourAnalysis.alternatives 
-              : [],
-            flours: Array.isArray(data.detailedAnalysis?.flourAnalysis?.flours)
-              ? data.detailedAnalysis.flourAnalysis.flours
+            rationale: data.detailedAnalysis?.flourAnalysis?.rationale || "Select flour based on protein content appropriate for style.",
+            flours: Array.isArray(data.detailedAnalysis?.flourAnalysis?.flours) 
+              ? data.detailedAnalysis.flourAnalysis.flours 
               : [{
-                  type: primaryFlourType,
-                  percentage: 100,
-                  proteinContent: "Unknown",
-                  purpose: "Base flour"
+                  type: primaryFlourType || "00 Flour",
+                  proteinContent: 12.5,
+                  purpose: "Base flour for pizza dough"
                 }]
           },
+          
+          // Handle hydration analysis
           hydrationAnalysis: {
             ...data.detailedAnalysis?.hydrationAnalysis,
             percentage: data.detailedAnalysis?.hydrationAnalysis?.percentage || hydration,
-            rationale: data.detailedAnalysis?.hydrationAnalysis?.rationale || "Provides the right balance of extensibility and strength for this style.",
+            rationale: data.detailedAnalysis?.hydrationAnalysis?.rationale || "Provides the right balance of extensibility and strength.",
             impact: Array.isArray(data.detailedAnalysis?.hydrationAnalysis?.impact)
               ? data.detailedAnalysis.hydrationAnalysis.impact
-              : ["Affects dough extensibility", "Influences final texture"]
+              : ["Affects dough extensibility", "Influences final texture", "Changes fermentation rate"]
           },
+          
+          // Handle salt analysis
           saltAnalysis: {
             ...data.detailedAnalysis?.saltAnalysis,
             percentage: data.detailedAnalysis?.saltAnalysis?.percentage || salt,
             rationale: data.detailedAnalysis?.saltAnalysis?.rationale || "Controls fermentation rate and enhances flavor.",
             impact: Array.isArray(data.detailedAnalysis?.saltAnalysis?.impact)
               ? data.detailedAnalysis.saltAnalysis.impact
-              : ["Strengthens gluten structure", "Controls fermentation rate"]
+              : ["Strengthens gluten structure", "Controls fermentation rate", "Enhances flavor"]
           },
+          
+          // Handle yeast analysis
           yeastAnalysis: {
             ...data.detailedAnalysis?.yeastAnalysis,
             type: data.detailedAnalysis?.yeastAnalysis?.type || yeastType,
-            percentage: data.detailedAnalysis?.yeastAnalysis?.percentage || 0.2,
-            rationale: data.detailedAnalysis?.yeastAnalysis?.rationale || "Provides optimal fermentation rate for this style.",
+            percentage: data.detailedAnalysis?.yeastAnalysis?.percentage || 
+                      (fermentationTime === 'quick' ? 0.8 : 
+                       fermentationTime === 'same-day' ? 0.3 : 0.1),
+            rationale: data.detailedAnalysis?.yeastAnalysis?.rationale || 
+                      `Amount adjusted for ${fermentationTime} fermentation at ${roomTemp}°${tempUnit}.`,
             impact: Array.isArray(data.detailedAnalysis?.yeastAnalysis?.impact)
               ? data.detailedAnalysis.yeastAnalysis.impact
-              : ["Determines fermentation speed", "Affects flavor development"],
+              : ["Determines fermentation speed", "Affects flavor development", "Responds to temperature changes"],
             temperatureNotes: Array.isArray(data.detailedAnalysis?.yeastAnalysis?.temperatureNotes)
               ? data.detailedAnalysis.yeastAnalysis.temperatureNotes
-              : ["Activity increases with temperature", "Optimal range: 22-27°C"]
+              : [`At ${roomTemp}°${tempUnit}, fermentation will be ${
+                  parseFloat(roomTemp) > (tempUnit === 'F' ? 75 : 24) ? 'faster' : 'slower'
+                }`, "Adjust fermentation time accordingly"]
           },
-          temperatureAnalysis: {
-            ...data.detailedAnalysis?.temperatureAnalysis,
-            roomTemp: data.detailedAnalysis?.temperatureAnalysis?.roomTemp || parseFloat(roomTemp),
-            season: data.detailedAnalysis?.temperatureAnalysis?.season || "Standard",
-            rationale: data.detailedAnalysis?.temperatureAnalysis?.rationale || "Affects fermentation rate and dough development.",
-            impact: Array.isArray(data.detailedAnalysis?.temperatureAnalysis?.impact)
-              ? data.detailedAnalysis.temperatureAnalysis.impact
-              : ["Higher temperatures speed up fermentation", "Lower temperatures slow down fermentation"],
-            recommendations: Array.isArray(data.detailedAnalysis?.temperatureAnalysis?.recommendations)
-              ? data.detailedAnalysis.temperatureAnalysis.recommendations
-              : ["Adjust fermentation time based on room temperature", "Consider using colder water in warm environments"]
-          },
+          
+          // Handle fermentation analysis
           fermentationAnalysis: {
             ...data.detailedAnalysis?.fermentationAnalysis,
-            totalTime: data.detailedAnalysis?.fermentationAnalysis?.totalTime || 12,
             type: data.detailedAnalysis?.fermentationAnalysis?.type || fermentationTime,
-            rationale: data.detailedAnalysis?.fermentationAnalysis?.rationale || "Provides balanced flavor development and optimal structure.",
+            totalTime: data.detailedAnalysis?.fermentationAnalysis?.totalTime || 
+                      (fermentationTime === 'quick' ? 4 :
+                       fermentationTime === 'same-day' ? 10 :
+                       fermentationTime === 'overnight' ? 18 : 36),
+            rationale: data.detailedAnalysis?.fermentationAnalysis?.rationale || 
+                      `${fermentationTime} fermentation develops appropriate flavor and structure.`,
             impact: Array.isArray(data.detailedAnalysis?.fermentationAnalysis?.impact)
               ? data.detailedAnalysis.fermentationAnalysis.impact
-              : ["Affects flavor complexity", "Influences dough structure"],
+              : ["Develops complex flavors", "Improves texture", "Enhances digestibility"],
             roomTemp: {
-              ...data.detailedAnalysis?.fermentationAnalysis?.roomTemp,
-              time: data.detailedAnalysis?.fermentationAnalysis?.roomTemp?.time || 8,
-              temperature: data.detailedAnalysis?.fermentationAnalysis?.roomTemp?.temperature || parseFloat(roomTemp),
+              time: data.detailedAnalysis?.fermentationAnalysis?.roomTemp?.time || 
+                    (fermentationTime === 'quick' ? 3 :
+                     fermentationTime === 'same-day' ? 10 : 2),
+              temperature: data.detailedAnalysis?.fermentationAnalysis?.roomTemp?.temperature || 
+                          parseFloat(roomTemp),
               impact: Array.isArray(data.detailedAnalysis?.fermentationAnalysis?.roomTemp?.impact)
                 ? data.detailedAnalysis.fermentationAnalysis.roomTemp.impact
-                : ["Primary fermentation phase", "Sets foundation for flavor development"]
+                : ["Sets foundation for gluten development", "Initiates yeast activity"]
             },
-            coldTemp: data.detailedAnalysis?.fermentationAnalysis?.coldTemp || null,
-            enzymaticActivity: data.detailedAnalysis?.fermentationAnalysis?.enzymaticActivity || "Moderate enzymatic activity - balanced amylase and protease action.",
-            gluten: data.detailedAnalysis?.fermentationAnalysis?.gluten || "Medium-strong gluten development - extensible yet strong enough to hold structure."
+            ...(fermentationTime === 'overnight' || fermentationTime === 'cold' 
+              ? {
+                  coldTemp: data.detailedAnalysis?.fermentationAnalysis?.coldTemp || {
+                    time: fermentationTime === 'overnight' ? 14 : 36,
+                    temperature: 4,
+                    impact: ["Slows fermentation for flavor development", "Enhances digestibility"]
+                  }
+                } 
+              : {}),
+            enzymaticActivity: data.detailedAnalysis?.fermentationAnalysis?.enzymaticActivity || 
+                              "Balanced enzymatic activity helps develop flavor and texture.",
+            gluten: data.detailedAnalysis?.fermentationAnalysis?.gluten || 
+                   "Progressive gluten development creates extensible yet strong dough."
           },
+          
+          // Handle technique guidance
           techniqueGuidance: data.detailedAnalysis?.techniqueGuidance || {
-            handling: "Handle dough gently to preserve gas bubbles. Use minimal flour when working with it.",
-            shaping: "Shape with decisive yet gentle movements. Avoid degassing the dough excessively.",
-            baking: `Preheat your ${ovenType === 'home' ? 'home oven' : 'pizza oven'} thoroughly. Use a pizza stone or steel if available.`
+            mixing: "Mix ingredients until just combined, then rest before kneading gently.",
+            folding: "Use stretch and folds during bulk fermentation to build strength.",
+            shaping: "Shape gently to preserve gas, forming tight, smooth dough balls.",
+            baking: `Preheat your ${ovenType === 'home' ? 'oven and stone/steel' : 'pizza oven'} thoroughly before baking.`
           }
         },
         timeline: Array.isArray(data.timeline) 
@@ -1578,45 +1653,36 @@ export function DoughCalculator() {
                 <CardDescription>Step by step guide for your dough preparation</CardDescription>
                 </CardHeader>
                 <CardContent>
-                {recipeResult?.timeline?.map((step, index) => {
-                  // Correct conditional rendering syntax for connector
-                  const timelineConnector = index !== recipeResult?.timeline?.length - 1 ? (
+                {recipeResult?.processTimeline?.steps?.map((step, index) => {
+                  const timelineConnector = index !== recipeResult.processTimeline.steps.length - 1 ? (
                     <div className="absolute left-[11px] top-2 h-full w-[2px] bg-muted-foreground/20" />
                   ) : null;
 
                   return (
                     <div key={index} className="relative pl-8 pb-6 last:pb-0">
                       {timelineConnector}
-                      {/* ... marker ... */}
-                      <div className="absolute left-0 top-0 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-bold"> {/* Changed background/text */}
-                        {index + 1} 
+                      <div className="absolute left-0 top-0 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-bold">
+                        {step.step}
                       </div>
-                      
-                      {/* Step content */}
-                      <div className="space-y-2"> {/* Added spacing */}
-                        <h4 className="font-semibold text-base leading-tight">{step.title}</h4> {/* Increased font weight/size */}
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-x-4 gap-y-1 text-sm text-muted-foreground"> {/* Made flex column on small screens */}
-                          {step.day && step.timeOfDay && (
-                            <div className="flex items-center gap-1.5"> {/* Increased gap */}
-                              <CalendarIcon className="h-4 w-4" /> 
-                              <span>Day {step.day}, {step.timeOfDay}</span>
-                            </div>
-                          )}
+                      <div className="space-y-2">
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
                           {step.duration && (
-                            <div className="flex items-center gap-1.5"> {/* Increased gap */}
+                            <div className="flex items-center gap-1.5">
                               <Clock className="h-4 w-4" />
                               <span>{step.duration}</span>
                             </div>
                           )}
+                          {step.isRefrigeration && (
+                            <div className="flex items-center gap-1.5">
+                              <Thermometer className="h-4 w-4 text-blue-500" />
+                              <span>Refrigeration Step</span>
+                            </div>
+                          )}
                         </div>
-                        {step.instructions && (
-                          <p className="text-sm text-foreground pt-1">
-                            {step.instructions}
-                          </p>
-                        )}
-                        {Array.isArray(step.tips) && step.tips.length > 0 && (
+                        <p className="text-sm text-foreground pt-1">{step.description}</p>
+                        {step.tips && step.tips.length > 0 && (
                           <div className="mt-3 space-y-1.5">
-                            {step.tips.map((tip: string, tipIndex: number) => (
+                            {step.tips.map((tip, tipIndex) => (
                               <div key={tipIndex} className="flex items-start gap-2 text-sm text-muted-foreground">
                                 <LightbulbIcon className="h-4 w-4 mt-0.5 text-yellow-500 flex-shrink-0" />
                                 <span>{tip}</span>
@@ -1625,13 +1691,13 @@ export function DoughCalculator() {
                           </div>
                         )}
                       </div>
-                  </div>
-                  ); // Ensure return is correctly closed
+                    </div>
+                  );
                 })}
                 </CardContent>
               </Card>
 
-            {/* Technical Analysis - Also update Flour Tab for authenticityScore */}
+            {/* Technical Analysis */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg font-semibold">Technical Analysis</CardTitle>
@@ -1640,592 +1706,354 @@ export function DoughCalculator() {
               <CardContent>
                 {recipeResult?.detailedAnalysis ? (
                   <div className="space-y-8">
-                    {/* Analysis Tabs */}
                     <Tabs defaultValue="flour" className="w-full">
-                      <TabsList className="mb-4"> {/* Removed grid classes, allow flex wrap */}
-                        <TabsTrigger value="flour" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
+                      <TabsList className="mb-4">
+                        <TabsTrigger value="flour" className="text-xs flex-shrink-0">
                           <Wheat className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Flour</span>
                         </TabsTrigger>
-                        <TabsTrigger value="hydration" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
+                        <TabsTrigger value="hydration" className="text-xs flex-shrink-0">
                           <Droplets className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Hydration</span>
                         </TabsTrigger>
-                        <TabsTrigger value="salt" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
+                        <TabsTrigger value="salt" className="text-xs flex-shrink-0">
                           <CircleDot className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Salt</span>
                         </TabsTrigger>
-                        <TabsTrigger value="yeast" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
+                        <TabsTrigger value="yeast" className="text-xs flex-shrink-0">
                           <Beaker className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Yeast</span>
                         </TabsTrigger>
-                        <TabsTrigger value="temperature" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
+                        <TabsTrigger value="temperature" className="text-xs flex-shrink-0">
                           <Thermometer className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Temperature</span>
                         </TabsTrigger>
-                        <TabsTrigger value="fermentation" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
+                        <TabsTrigger value="fermentation" className="text-xs flex-shrink-0">
                           <Clock className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Fermentation</span>
                         </TabsTrigger>
-                        <TabsTrigger value="technique" className="text-xs flex-shrink-0"> {/* Added flex-shrink-0 */}
+                        <TabsTrigger value="technique" className="text-xs flex-shrink-0">
                           <Utensils className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Technique</span>
                         </TabsTrigger>
                       </TabsList>
 
-                      {/* Flour Analysis Tab */}
                       <TabsContent value="flour" className="space-y-4">
-                        <div className="space-y-4">
-                          {/* Primary Flour Recommendation */}
-                          {recipeResult.flourRecommendation?.primaryFlour && (
-                            <div className="bg-muted/30 rounded-lg p-4">
-                              <div className="flex items-center justify-between mb-2">
-                                <h4 className="font-medium">{recipeResult.flourRecommendation.primaryFlour.name}</h4>
-                                <div className="flex items-center gap-2">
-                                  {/* Authenticity Score Badge Removed */}
-                                  <Badge variant="secondary">{recipeResult.flourRecommendation.primaryFlour.proteinPercentage}% Protein</Badge>
-                                </div>
+                        {recipeResult.flourRecommendation?.primary && (
+                          <div className="p-4 bg-muted/30 rounded-lg">
+                            <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                              <Wheat className="h-5 w-5" />
+                              Recommended Flour
+                            </h3>
+                            <div className="space-y-2">
+                              <p className="font-semibold">{recipeResult.flourRecommendation.primary.name}</p>
+                              <Badge variant="outline">{recipeResult.flourRecommendation.primary.protein}</Badge>
+                              <p className="text-muted-foreground mt-1">{recipeResult.flourRecommendation.primary.description}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {recipeResult.flourRecommendation?.alternatives && recipeResult.flourRecommendation.alternatives.length > 0 && (
+                          <div className="p-4 bg-muted/30 rounded-lg">
+                            <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                              <Wheat className="h-5 w-5" />
+                              Alternative Flours
+                            </h3>
+                            {recipeResult.flourRecommendation.alternatives.map((flour, index) => (
+                              <div key={index} className="mt-2 space-y-1">
+                                <p className="font-semibold">{flour.name}</p>
+                                <Badge variant="outline">{flour.protein}</Badge>
+                                <p className="text-muted-foreground mt-1">{flour.description}</p>
                               </div>
-                              <p className="text-sm text-muted-foreground font-medium">Why this flour?</p>
-                              <p className="text-sm text-muted-foreground mb-2">{recipeResult.flourRecommendation.primaryFlour.purpose}</p>
-                              <p className="text-sm text-muted-foreground font-medium">Authenticity Notes:</p>
-                              <p className="text-sm text-muted-foreground">{recipeResult.flourRecommendation.primaryFlour.authenticity}</p>
-                            </div>
-                          )}
+                            ))}
+                          </div>
+                        )}
 
-                          {/* Alternative Flours Section */}
-                          {recipeResult.flourRecommendation?.alternativeFlours && recipeResult.flourRecommendation.alternativeFlours.length > 0 && (
-                            <div className="space-y-3 pt-2">
-                              <h4 className="text-sm font-medium">Alternative Flours</h4>
-                              {/* Conditional warning for Neapolitan */}
-                              {selectedStyle === 'neapolitan' && (
-                                <Alert variant="default" className="border-l-4 border-yellow-400 bg-yellow-50 p-4">
-                                  <AlertCircle className="h-4 w-4 text-yellow-700" />
-                                  <AlertTitle className="text-yellow-800">Authenticity Note</AlertTitle>
-                                  <AlertDescription className="text-xs text-yellow-700">
-                                    For authentic Neapolitan pizza, strictly adhere to the primary recommended Italian '00' flour. Alternative suggestions may compromise traditional results.
-                                  </AlertDescription>
-                                </Alert>
-                              )}
-                              {/* Map through alternative flours */}
-                              {recipeResult.flourRecommendation.alternativeFlours.map((flour: { name: string; proteinPercentage: number; mixRatio?: number }, index: number) => (
-                                <div key={`alt-${index}`} className="bg-muted/30 rounded-lg p-4">
-                                  <div className="flex items-center justify-between mb-2">
-                                    <h4 className="font-medium">{flour.name}</h4>
-                                    <div className="flex gap-2">
-                                      {flour.mixRatio !== undefined && (
-                                        <Badge>{flour.mixRatio}%</Badge>
-                                      )}
-                                      <Badge variant="secondary">{flour.proteinPercentage}% Protein</Badge>
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          {/* Fallback for older detailedAnalysis structure (if flourRecommendation doesn't exist) */}
-                          {recipeResult.detailedAnalysis?.flourAnalysis?.flours && 
-                           !recipeResult.flourRecommendation && 
-                           recipeResult.detailedAnalysis.flourAnalysis.flours.length > 0 && (
-                            <div className="space-y-3 pt-2">
-                              <h4 className="text-sm font-medium">Flour Details (Legacy)</h4>
-                              {recipeResult.detailedAnalysis.flourAnalysis.flours.map((flour: { type: string; percentage?: number; proteinContent: number; purpose: string }, index: number) => (
-                                <div key={`legacy-${index}`} className="bg-muted/30 rounded-lg p-4">
-                                  <div className="flex items-center justify-between mb-2">
-                                    <h4 className="font-medium">{flour.type}</h4>
-                                    <div className="flex gap-2">
-                                      {flour.percentage && (
-                                        <Badge>{flour.percentage}%</Badge>
-                                      )}
-                                      <Badge variant="secondary">{flour.proteinContent}% Protein</Badge>
-                                    </div>
-                                  </div>
-                                  <p className="text-sm text-muted-foreground">{flour.purpose}</p>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          {/* Overall Rationale (Always check detailedAnalysis) */}
-                          {recipeResult.detailedAnalysis?.flourAnalysis?.rationale && (
-                            <div className="space-y-2 pt-2">
-                              <h4 className="text-sm font-medium">Overall Rationale</h4>
-                              <p className="text-sm text-muted-foreground">
-                                {recipeResult.detailedAnalysis.flourAnalysis.rationale}
-                              </p>
-                            </div>
-                          )}
-                        </div>
+                        {recipeResult.detailedAnalysis?.flourAnalysis?.rationale && (
+                          <div className="p-4 bg-muted/30 rounded-lg">
+                            <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                              <LightbulbIcon className="h-5 w-5" />
+                              Flour Analysis
+                            </h3>
+                            <p className="text-muted-foreground leading-relaxed">{recipeResult.detailedAnalysis.flourAnalysis.rationale}</p>
+                          </div>
+                        )}
                       </TabsContent>
 
-                      {/* Hydration Analysis Tab */}
                       <TabsContent value="hydration" className="space-y-4">
                         <div className="space-y-4">
-                          <div className="flex items-center gap-2">
-                            <Badge variant="secondary" className="text-lg">
-                              {recipeResult.hydrationRecommendation?.percentage || 
-                               recipeResult.detailedAnalysis?.hydrationAnalysis?.percentage}%
-                            </Badge>
-                            <span className="text-sm text-muted-foreground">Hydration</span>
-                          </div>
-                    <div className="space-y-2">
-                            <p className="text-sm text-muted-foreground">
-                              {recipeResult.hydrationRecommendation?.rationale || 
-                               recipeResult.detailedAnalysis?.hydrationAnalysis?.rationale}
+                          <div className="p-4 bg-muted/30 rounded-lg">
+                            <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                              <Droplet className="h-5 w-5" />
+                              Recommended Hydration
+                            </h3>
+                            <p className="text-2xl font-bold mb-2">
+                              {recipeResult.detailedAnalysis?.hydrationAnalysis?.percentage || hydration}%
                             </p>
-                        </div>
-                          <div className="space-y-2">
-                            <h4 className="text-sm font-medium">Impact on Dough</h4>
-                            <ul className="list-disc list-inside text-sm text-muted-foreground">
-                              {(recipeResult.hydrationRecommendation?.impact || 
-                                recipeResult.detailedAnalysis?.hydrationAnalysis?.impact || []).map((impact, index) => (
-                                <li key={index}>{impact}</li>
-                              ))}
-                            </ul>
-                      </div>
-                          {recipeResult.hydrationRecommendation?.rationale && (
-                            <div className="space-y-2">
-                               <h4 className="text-sm font-medium">Rationale</h4>
-                               <p className="text-sm text-muted-foreground">
-                                  {recipeResult.hydrationRecommendation.rationale}
-                               </p>
-                    </div>
+                          </div>
+                          
+                          {recipeResult.detailedAnalysis?.hydrationAnalysis?.rationale && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <LightbulbIcon className="h-5 w-5" />
+                                Hydration Analysis
+                              </h3>
+                              <p className="text-muted-foreground leading-relaxed">{recipeResult.detailedAnalysis.hydrationAnalysis.rationale}</p>
+                            </div>
                           )}
-                          {recipeResult.hydrationRecommendation?.impact && Array.isArray(recipeResult?.hydrationRecommendation?.impact) && recipeResult.hydrationRecommendation.impact.length > 0 && (
-                            <div className="space-y-2">
-                               <h4 className="text-sm font-medium">Impact on Dough</h4>
-                               <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-                                  {recipeResult.hydrationRecommendation.impact.map((item: string, index: number) => (
-                                     <li key={index}>{item}</li>
-                                  ))}
-                               </ul>
-                  </div>
-                          )}
-                          {recipeResult.hydrationRecommendation?.recommendations && Array.isArray(recipeResult?.hydrationRecommendation?.recommendations) && recipeResult.hydrationRecommendation.recommendations.length > 0 && (
+
+                          {recipeResult.detailedAnalysis?.hydrationAnalysis?.impact && recipeResult.detailedAnalysis.hydrationAnalysis.impact.length > 0 && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <ChefHat className="h-5 w-5" />
+                                Impact on Dough
+                              </h3>
                               <div className="space-y-2">
-                                 <h4 className="text-sm font-medium">Recommendations</h4>
-                                 <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-                                    {recipeResult.hydrationRecommendation.recommendations.map((item: string, index: number) => (
-                                       <li key={index}>{item}</li>
-                                    ))}
-                                 </ul>
+                                {recipeResult.detailedAnalysis.hydrationAnalysis.impact.map((impact, index) => (
+                                  <div key={index} className="flex items-start gap-2 text-muted-foreground">
+                                    <span className="text-primary">•</span>
+                                    <span>{impact}</span>
+                                  </div>
+                                ))}
                               </div>
+                            </div>
                           )}
                         </div>
                       </TabsContent>
 
-                      {/* Salt Analysis Tab */}
                       <TabsContent value="salt" className="space-y-4">
                         <div className="space-y-4">
-                          <div className="flex items-center gap-2">
-                            <Badge variant="secondary" className="text-lg">
-                              {recipeResult.saltRecommendation?.percentage || 
-                               recipeResult.detailedAnalysis?.saltAnalysis?.percentage}%
-                            </Badge>
-                            <span className="text-sm text-muted-foreground">Salt</span>
-                          </div>
-                    <div className="space-y-2">
-                            <p className="text-sm text-muted-foreground">
-                              {recipeResult.saltRecommendation?.rationale || 
-                               recipeResult.detailedAnalysis?.saltAnalysis?.rationale}
+                          <div className="p-4 bg-muted/30 rounded-lg">
+                            <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                              <CircleDot className="h-5 w-5" />
+                              Recommended Salt
+                            </h3>
+                            <p className="text-2xl font-bold mb-2">
+                              {recipeResult.detailedAnalysis?.saltAnalysis?.percentage || salt}%
                             </p>
-                        </div>
-                          {recipeResult.detailedAnalysis?.saltAnalysis?.impact && (
-                            <div className="space-y-2">
-                              <h4 className="text-sm font-medium">Impact on Dough</h4>
-                              <ul className="list-disc list-inside text-sm text-muted-foreground">
+                          </div>
+                          
+                          {recipeResult.detailedAnalysis?.saltAnalysis?.rationale && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <LightbulbIcon className="h-5 w-5" />
+                                Salt Analysis
+                              </h3>
+                              <p className="text-muted-foreground leading-relaxed">{recipeResult.detailedAnalysis.saltAnalysis.rationale}</p>
+                            </div>
+                          )}
+
+                          {recipeResult.detailedAnalysis?.saltAnalysis?.impact && recipeResult.detailedAnalysis.saltAnalysis.impact.length > 0 && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <ChefHat className="h-5 w-5" />
+                                Impact on Dough
+                              </h3>
+                              <div className="space-y-2">
                                 {recipeResult.detailedAnalysis.saltAnalysis.impact.map((impact, index) => (
-                                  <li key={index}>{impact}</li>
+                                  <div key={index} className="flex items-start gap-2 text-muted-foreground">
+                                    <span className="text-primary">•</span>
+                                    <span>{impact}</span>
+                                  </div>
                                 ))}
-                              </ul>
-                      </div>
-                          )}
-                          {recipeResult.saltRecommendation?.rationale && (
-                             <div className="space-y-2">
-                                <h4 className="text-sm font-medium">Rationale</h4>
-                                <p className="text-sm text-muted-foreground">
-                                  {recipeResult.saltRecommendation.rationale}
-                                </p>
-                    </div>
-                          )}
-                          {recipeResult.saltRecommendation?.impact && Array.isArray(recipeResult?.saltRecommendation?.impact) && recipeResult.saltRecommendation.impact.length > 0 && ( 
- <div className="space-y-2">
-   <h4 className="text-sm font-medium">Impact on Dough</h4>
-   <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-      {recipeResult.saltRecommendation.impact.map((impact: string, index: number) => ( 
-         <li key={index}>{impact}</li>
-      ))}
-   </ul>
- </div>
-                          )}
-                          {recipeResult.saltRecommendation?.recommendations && Array.isArray(recipeResult?.saltRecommendation?.recommendations) && recipeResult.saltRecommendation.recommendations.length > 0 && ( 
-  <div className="space-y-2">
-     <h4 className="text-sm font-medium">Recommendations</h4>
-     <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-        {recipeResult.saltRecommendation.recommendations.map((item: string, index: number) => ( 
-           <li key={index}>{item}</li>
-        ))}
-     </ul>
-  </div>
+                              </div>
+                            </div>
                           )}
                         </div>
                       </TabsContent>
 
-                      {/* Yeast Analysis Tab */}
                       <TabsContent value="yeast" className="space-y-4">
                         <div className="space-y-4">
-                          <div className="flex items-center gap-2">
-                            <Badge variant="secondary" className="text-lg">
-                              {recipeResult.yeastRecommendation?.percentage || 
-                               recipeResult.detailedAnalysis?.yeastAnalysis?.percentage}%
+                          <div className="p-4 bg-muted/30 rounded-lg">
+                            <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                              <Beaker className="h-5 w-5" />
+                              Recommended Yeast
+                            </h3>
+                            <p className="text-2xl font-bold mb-2">
+                              {recipeResult.detailedAnalysis?.yeastAnalysis?.percentage || 0.2}%
+                            </p>
+                            <Badge variant="outline">
+                              {recipeResult.detailedAnalysis?.yeastAnalysis?.type || yeastType}
                             </Badge>
-                            <span className="text-sm text-muted-foreground">
-                              {recipeResult.yeastRecommendation?.type || 
-                               recipeResult.detailedAnalysis?.yeastAnalysis?.type}
-                            </span>
                           </div>
-                      <div className="space-y-2">
-                            <p className="text-sm text-muted-foreground">
-                              {recipeResult.yeastRecommendation?.rationale || 
-                               recipeResult.detailedAnalysis?.yeastAnalysis?.rationale}
+                          
+                          {recipeResult.detailedAnalysis?.yeastAnalysis?.rationale && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <LightbulbIcon className="h-5 w-5" />
+                                Yeast Analysis
+                              </h3>
+                              <p className="text-muted-foreground leading-relaxed">{recipeResult.detailedAnalysis.yeastAnalysis.rationale}</p>
+                            </div>
+                          )}
+
+                          {recipeResult.detailedAnalysis?.yeastAnalysis?.impact && recipeResult.detailedAnalysis.yeastAnalysis.impact.length > 0 && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <ChefHat className="h-5 w-5" />
+                                Impact on Dough
+                              </h3>
+                              <div className="space-y-2">
+                                {recipeResult.detailedAnalysis.yeastAnalysis.impact.map((impact, index) => (
+                                  <div key={index} className="flex items-start gap-2 text-muted-foreground">
+                                    <span className="text-primary">•</span>
+                                    <span>{impact}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {recipeResult.detailedAnalysis?.yeastAnalysis?.temperatureNotes && recipeResult.detailedAnalysis.yeastAnalysis.temperatureNotes.length > 0 && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <Thermometer className="h-5 w-5" />
+                                Temperature Notes
+                              </h3>
+                              <div className="space-y-2">
+                                {recipeResult.detailedAnalysis.yeastAnalysis.temperatureNotes.map((note, index) => (
+                                  <div key={index} className="flex items-start gap-2 text-muted-foreground">
+                                    <span className="text-primary">•</span>
+                                    <span>{note}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </TabsContent>
+
+                      <TabsContent value="temperature" className="space-y-4">
+                        <div className="space-y-4">
+                          <div className="p-4 bg-muted/30 rounded-lg">
+                            <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                              <Thermometer className="h-5 w-5" />
+                              Recommended Temperature
+                            </h3>
+                            <p className="text-2xl font-bold mb-2">
+                              {roomTemp}°{tempUnit}
                             </p>
                           </div>
-                          {recipeResult.detailedAnalysis?.yeastAnalysis?.impact && (
-                            <div className="space-y-2">
-                              <h4 className="text-sm font-medium">Impact on Fermentation</h4>
-                              <ul className="list-disc list-inside text-sm text-muted-foreground">
-                                {recipeResult.detailedAnalysis.yeastAnalysis.impact.map((impact, index) => (
-                                  <li key={index}>{impact}</li>
-                                ))}
-                              </ul>
-                        </div>
-                          )}
-                          {recipeResult.yeastRecommendation?.rationale && (
-                             <div className="space-y-2">
-                                <h4 className="text-sm font-medium">Rationale</h4>
-                                <p className="text-sm text-muted-foreground">
-                                  {recipeResult.yeastRecommendation.rationale}
-                                </p>
-                      </div>
-                    )}
-                          {recipeResult.yeastRecommendation?.impact && Array.isArray(recipeResult?.yeastRecommendation?.impact) && recipeResult.yeastRecommendation.impact.length > 0 && ( 
- <div className="space-y-2">
-   <h4 className="text-sm font-medium">Impact on Fermentation</h4>
-   <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-      {recipeResult.yeastRecommendation.impact.map((impact: string, index: number) => ( 
-         <li key={index}>{impact}</li>
-      ))}
-   </ul>
- </div>
-                          )}
-                          {recipeResult.yeastRecommendation?.temperatureNotes && 
-                           Array.isArray(recipeResult?.yeastRecommendation?.temperatureNotes) && 
-                           recipeResult?.yeastRecommendation?.temperatureNotes?.length > 0 && (
-                            <div className="space-y-2">
-                              <h4 className="text-sm font-medium">Temperature Considerations</h4>
-                              <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-                                {recipeResult?.yeastRecommendation?.temperatureNotes?.map((note: string, index: number) => (
-                                  <li key={index}>{note}</li>
-                                ))}
-                              </ul>
+                          
+                          {recipeResult.temperatureAnalysis?.rationale && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <LightbulbIcon className="h-5 w-5" />
+                                Temperature Analysis
+                              </h3>
+                              <p className="text-muted-foreground leading-relaxed">{recipeResult.temperatureAnalysis.rationale}</p>
                             </div>
                           )}
-                          {recipeResult.yeastRecommendation?.recommendations && Array.isArray(recipeResult?.yeastRecommendation?.recommendations) && recipeResult.yeastRecommendation.recommendations.length > 0 && ( 
-  <div className="space-y-2">
-     <h4 className="text-sm font-medium">Recommendations</h4>
-     <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-        {recipeResult.yeastRecommendation.recommendations.map((item: string, index: number) => ( 
-           <li key={index}>{item}</li>
-        ))}
-     </ul>
-  </div>
+
+                          {recipeResult.temperatureAnalysis?.recommendations && recipeResult.temperatureAnalysis.recommendations.length > 0 && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <ChefHat className="h-5 w-5" />
+                                Temperature Tips
+                              </h3>
+                              <div className="space-y-2">
+                                {recipeResult.temperatureAnalysis.recommendations.map((recommendation, index) => (
+                                  <div key={index} className="flex items-start gap-2 text-muted-foreground">
+                                    <span className="text-primary">•</span>
+                                    <span>{recommendation}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
                           )}
                         </div>
                       </TabsContent>
 
-                      {/* Temperature Analysis Tab - Use correct nested path */} 
-                      <TabsContent value="temperature" className="space-y-4">
-                        {recipeResult?.temperatureAnalysis || recipeResult?.detailedAnalysis?.temperatureAnalysis ? (
-                          <div className="space-y-4">
-                            <div className="flex items-center gap-2 flex-wrap"> 
-                              <Badge variant="secondary" className="text-lg">
-                                 {formatTemperature(
-                                    recipeResult?.temperatureAnalysis?.roomTempC || 
-                                    recipeResult?.detailedAnalysis?.temperatureAnalysis?.roomTemp || 
-                                    parseFloat(roomTemp), 
-                                    tempUnit
-                                 )} 
-                              </Badge>
-                              <span className="text-sm text-muted-foreground">Room Temperature</span>
-                              {(recipeResult?.temperatureAnalysis?.season || recipeResult?.detailedAnalysis?.temperatureAnalysis?.season) && (
-                                 <Badge variant="outline">
-                                    {recipeResult?.temperatureAnalysis?.season || recipeResult?.detailedAnalysis?.temperatureAnalysis?.season}
-                                 </Badge>
-                              )}
-                            </div>
-                            {(recipeResult?.temperatureAnalysis?.rationale || recipeResult?.detailedAnalysis?.temperatureAnalysis?.rationale) && (
-                              <div className="space-y-2">
-                                 <h4 className="text-sm font-medium">Rationale</h4>
-                                 <p className="text-sm text-muted-foreground">
-                                    {recipeResult?.temperatureAnalysis?.rationale || recipeResult?.detailedAnalysis?.temperatureAnalysis?.rationale}
-                                 </p>
-                              </div>
-                            )}
-                            {/* Check impact from either source */}
-                            {(Array.isArray(recipeResult?.temperatureAnalysis?.impact) && recipeResult?.temperatureAnalysis?.impact.length > 0) || 
-                             (Array.isArray(recipeResult?.detailedAnalysis?.temperatureAnalysis?.impact) && recipeResult?.detailedAnalysis?.temperatureAnalysis?.impact.length > 0) && (
-                              <div className="space-y-2">
-                                 <h4 className="text-sm font-medium">Impact on Fermentation</h4>
-                                 <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-                                    {(recipeResult?.temperatureAnalysis?.impact || recipeResult?.detailedAnalysis?.temperatureAnalysis?.impact || []).map((impact: string, index: number) => (
-                                       <li key={index}>{impact}</li>
-                                    ))}
-                                 </ul>
-                              </div>
-                            )}
-                            {/* Check recommendations from either source */}
-                            {(Array.isArray(recipeResult?.temperatureAnalysis?.recommendations) && recipeResult?.temperatureAnalysis?.recommendations.length > 0) || 
-                             (Array.isArray(recipeResult?.detailedAnalysis?.temperatureAnalysis?.recommendations) && recipeResult?.detailedAnalysis?.temperatureAnalysis?.recommendations.length > 0) && (
-                              <div className="space-y-2">
-                                 <h4 className="text-sm font-medium">Recommendations</h4>
-                                 <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-                                    {(recipeResult?.temperatureAnalysis?.recommendations || recipeResult?.detailedAnalysis?.temperatureAnalysis?.recommendations || []).map((rec: string, index: number) => (
-                                       <li key={index}>{rec}</li>
-                                    ))}
-                                 </ul>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                           <p className="text-sm text-muted-foreground">Temperature analysis data not available.</p>
-                        )}
-                      </TabsContent>
-
-                      {/* Fermentation Analysis Tab */}
                       <TabsContent value="fermentation" className="space-y-4">
                         <div className="space-y-4">
-                          <div className="flex items-center gap-2 flex-wrap"> {/* Added flex-wrap */}
-                            <Badge variant="secondary" className="text-lg">
-                              {recipeResult.fermentationSchedule?.totalHours || 
-                               recipeResult.detailedAnalysis?.fermentationAnalysis?.totalTime} hours
+                          <div className="p-4 bg-muted/30 rounded-lg">
+                            <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                              <Clock className="h-5 w-5" />
+                              Fermentation Schedule
+                            </h3>
+                            <Badge className="mb-2" variant="outline">
+                              {recipeResult.detailedAnalysis?.fermentationAnalysis?.type || fermentationTime}
                             </Badge>
-                            <span className="text-sm text-muted-foreground">Total Fermentation Time</span>
-                            {/* CORRECTED Badge Logic */}
-                            {(recipeResult.fermentationSchedule?.type || recipeResult.detailedAnalysis?.fermentationAnalysis?.type || fermentationTime) && (
-                              <Badge variant="outline" className="capitalize">
-                                {(recipeResult.fermentationSchedule?.type || recipeResult.detailedAnalysis?.fermentationAnalysis?.type || fermentationTime).replace('-', ' ')}
-                              </Badge>
-                            )}
+                            <p className="text-2xl font-bold">
+                              {recipeResult.detailedAnalysis?.fermentationAnalysis?.totalTime || getFermentationDetails(fermentationTime).duration.min} hours
+                            </p>
                           </div>
-                          {(recipeResult.fermentationSchedule?.rationale || recipeResult.detailedAnalysis?.fermentationAnalysis?.rationale) && (
-                <div className="space-y-2">
-                               <h4 className="text-sm font-medium">Rationale</h4>
-                               <p className="text-sm text-muted-foreground">
-                                  {recipeResult.fermentationSchedule?.rationale || 
-                                   recipeResult.detailedAnalysis?.fermentationAnalysis?.rationale}
-                               </p>
+                          
+                          {recipeResult.detailedAnalysis?.fermentationAnalysis?.rationale && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <LightbulbIcon className="h-5 w-5" />
+                                Fermentation Analysis
+                              </h3>
+                              <p className="text-muted-foreground leading-relaxed">{recipeResult.detailedAnalysis.fermentationAnalysis.rationale}</p>
                             </div>
                           )}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"> {/* Responsive grid */}
-                            {/* Room Temp Phase */}
-                            {(recipeResult?.fermentationSchedule?.room || recipeResult?.detailedAnalysis?.fermentationAnalysis?.roomTemp) && (
-                               <div className="space-y-2">
-                                  <h4 className="text-sm font-medium">Room Temperature Phase</h4>
-                                  <div className="bg-muted/30 rounded-lg p-3 space-y-2"> {/* Added spacing */}
-                                     <p className="text-sm flex justify-between"><span>Temperature:</span> 
-                                        <span>
-                                            {/* Use formatTemperature with component state tempUnit */}
-                                            {formatTemperature(
-                                                recipeResult?.fermentationSchedule?.room?.tempC || 
-                                                recipeResult?.detailedAnalysis?.fermentationAnalysis?.roomTemp?.temperature, 
-                                                tempUnit
-                                            )}
-                                        </span>
-                                     </p>
-                                     <p className="text-sm flex justify-between"><span>Duration:</span> <span>{
-                                         recipeResult?.fermentationSchedule?.room?.hours || 
-                                         recipeResult?.detailedAnalysis?.fermentationAnalysis?.roomTemp?.time
-                                     } hours</span></p>
-                                     {(Array.isArray(recipeResult.fermentationSchedule?.room?.indicators) && recipeResult.fermentationSchedule?.room?.indicators.length > 0) || 
-                                      (Array.isArray(recipeResult.detailedAnalysis?.fermentationAnalysis?.roomTemp?.impact) && recipeResult.detailedAnalysis?.fermentationAnalysis?.roomTemp?.impact.length > 0) ? (
-                                          <div className="pt-1">
-                                             <p className="text-sm font-medium mb-1">Indicators:</p>
-                                             <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-                                                {(recipeResult.fermentationSchedule?.room?.indicators || 
-                                                recipeResult.detailedAnalysis?.fermentationAnalysis?.roomTemp?.impact || []).map((indicator: string, index: number) => (
-                                                   <li key={index}>{indicator}</li>
-                                                ))}
-                                             </ul>
-                </div>
-                                      ) : null}
-                                  </div>
-          </div>
-        )}
-                            {/* Cold Phase */}
-                            {(recipeResult?.fermentationSchedule?.cold || recipeResult?.detailedAnalysis?.fermentationAnalysis?.coldTemp) && (
-                               <div className="space-y-2">
-                                  <h4 className="text-sm font-medium">Cold Phase</h4>
-                                  <div className="bg-muted/30 rounded-lg p-3 space-y-2"> {/* Added spacing */}
-                                     <p className="text-sm flex justify-between"><span>Temperature:</span> 
-                                        <span>
-                                            {/* Use formatTemperature with component state tempUnit */}
-                                            {formatTemperature(
-                                                recipeResult?.fermentationSchedule?.cold?.tempC || 
-                                                recipeResult?.detailedAnalysis?.fermentationAnalysis?.coldTemp?.temperature, 
-                                                tempUnit
-                                            )}
-                                        </span>
-                                     </p>
-                                     <p className="text-sm flex justify-between"><span>Duration:</span> <span>{
-                                         recipeResult?.fermentationSchedule?.cold?.hours || 
-                                         recipeResult?.detailedAnalysis?.fermentationAnalysis?.coldTemp?.time
-                                     } hours</span></p>
-                                     {(Array.isArray(recipeResult.fermentationSchedule?.cold?.indicators) && recipeResult.fermentationSchedule?.cold?.indicators.length > 0) || 
-                                      (Array.isArray(recipeResult.detailedAnalysis?.fermentationAnalysis?.coldTemp?.impact) && recipeResult.detailedAnalysis?.fermentationAnalysis?.coldTemp?.impact.length > 0) ? (
-                                          <div className="pt-1">
-                                              <p className="text-sm font-medium mb-1">Indicators:</p>
-                                              <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-                                                 {(recipeResult.fermentationSchedule?.cold?.indicators || 
-                                                 recipeResult.detailedAnalysis?.fermentationAnalysis?.coldTemp?.impact || []).map((indicator: string, index: number) => (
-                                                    <li key={index}>{indicator}</li>
-                                                 ))}
-                                              </ul>
-                                          </div>
-                                      ) : null}
-                                  </div>
-                               </div>
-                            )}
-                          </div>
-                          {/* Enzymatic Activity & Gluten */}
-                          {recipeResult.detailedAnalysis?.fermentationAnalysis?.enzymaticActivity && (
+
+                          {recipeResult.detailedAnalysis?.fermentationAnalysis?.impact && recipeResult.detailedAnalysis.fermentationAnalysis.impact.length > 0 && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <ChefHat className="h-5 w-5" />
+                                Impact on Dough
+                              </h3>
                               <div className="space-y-2">
-                                <h4 className="text-sm font-medium">Enzymatic Activity</h4>
-                                <p className="text-sm text-muted-foreground">
-                                  {recipeResult.detailedAnalysis.fermentationAnalysis.enzymaticActivity}
-                                </p>
+                                {recipeResult.detailedAnalysis.fermentationAnalysis.impact.map((impact, index) => (
+                                  <div key={index} className="flex items-start gap-2 text-muted-foreground">
+                                    <span className="text-primary">•</span>
+                                    <span>{impact}</span>
+                                  </div>
+                                ))}
                               </div>
+                            </div>
                           )}
-                          {recipeResult.detailedAnalysis?.fermentationAnalysis?.gluten && (
-                              <div className="space-y-2">
-                                <h4 className="text-sm font-medium">Gluten Development</h4>
-                                <p className="text-sm text-muted-foreground">
-                                  {recipeResult.detailedAnalysis.fermentationAnalysis.gluten}
-                                </p>
-                              </div>
-                          )}
-                          {/* Fermentation Impact & Recommendations */}
-                           {((recipeResult?.fermentationSchedule?.impact && 
-   Array.isArray(recipeResult?.fermentationSchedule?.impact) && 
-   recipeResult?.fermentationSchedule?.impact.length > 0) || 
-  (recipeResult?.detailedAnalysis?.fermentationAnalysis?.impact && 
-   Array.isArray(recipeResult?.detailedAnalysis?.fermentationAnalysis?.impact) && 
-   recipeResult?.detailedAnalysis?.fermentationAnalysis?.impact.length > 0)) && (
-   <div className="space-y-2">
-      <h4 className="text-sm font-medium">Overall Impact</h4>
-      <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-         {(recipeResult?.fermentationSchedule?.impact || recipeResult?.detailedAnalysis?.fermentationAnalysis?.impact || []).map((impact: string, index: number) => (
-            <li key={index}>{impact}</li>
-         ))}
-      </ul>
-   </div>
-)}
-                           {recipeResult.fermentationSchedule?.recommendations && Array.isArray(recipeResult?.fermentationSchedule?.recommendations) && recipeResult.fermentationSchedule.recommendations.length > 0 && (
-                               <div className="space-y-2">
-                                  <h4 className="text-sm font-medium">Recommendations</h4>
-                                  <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-                                     {recipeResult.fermentationSchedule.recommendations.map((rec: string, index: number) => ( 
-                                        <li key={index}>{rec}</li>
-                                     ))}
-                                  </ul>
-                               </div>
-                           )}
                         </div>
                       </TabsContent>
 
-                      {/* Technique Guidance Tab */}
                       <TabsContent value="technique" className="space-y-4">
-                        {(recipeResult.techniques || recipeResult.detailedAnalysis?.techniqueGuidance) && (
-                          <div className="space-y-4">
-                            {recipeResult.techniques?.mixing && (
-                              <div className="space-y-2">
-                                <h4 className="text-sm font-medium flex items-center gap-2">
-                                  <Blend className="h-4 w-4" /> Mixing
-                                </h4>
-                                <p className="text-sm text-muted-foreground pl-6">
-                                  {recipeResult.techniques.mixing}
-              </p>
-            </div>
-                            )}
-                            {recipeResult.techniques?.folding && (
-                              <div className="space-y-2">
-                                <h4 className="text-sm font-medium flex items-center gap-2">
-                                  <Layers className="h-4 w-4" /> Folding / Stretch & Fold
-                                </h4>
-                                <p className="text-sm text-muted-foreground pl-6">
-                                  {recipeResult.techniques.folding}
-                                </p>
-          </div>
-        )}
-                            {recipeResult.techniques?.shaping && (
-                              <div className="space-y-2">
-                                <h4 className="text-sm font-medium flex items-center gap-2">
-                                  <Hand className="h-4 w-4" /> Shaping
-                                </h4>
-                                <p className="text-sm text-muted-foreground pl-6">
-                                  {recipeResult.techniques.shaping}
-                                </p>
-                              </div>
-                            )}
-                            {recipeResult.techniques?.baking && (
-                              <div className="space-y-2">
-                                <h4 className="text-sm font-medium flex items-center gap-2">
-                                  <CookingPot className="h-4 w-4" /> Baking
-                                </h4>
-                                <p className="text-sm text-muted-foreground pl-6">
-                                  {recipeResult.techniques.baking}
-                                </p>
-                              </div>
-                            )}
-                            {/* Fallback for older detailedAnalysis structure */}
-                            {!recipeResult.techniques && recipeResult.detailedAnalysis?.techniqueGuidance?.handling && (
-                              <div className="space-y-2">
-                                <h4 className="text-sm font-medium flex items-center gap-2">
-                                  <Hand className="h-4 w-4" /> Handling
-                                </h4>
-                                <p className="text-sm text-muted-foreground pl-6">
-                                  {recipeResult.detailedAnalysis.techniqueGuidance.handling}
-                                </p>
-                              </div>
-                            )}
-                             {!recipeResult.techniques && recipeResult.detailedAnalysis?.techniqueGuidance?.shaping && (
-                              <div className="space-y-2">
-                                <h4 className="text-sm font-medium flex items-center gap-2">
-                                  <Hand className="h-4 w-4" /> Shaping
-                                </h4>
-                                <p className="text-sm text-muted-foreground pl-6">
-                                  {recipeResult.detailedAnalysis.techniqueGuidance.shaping}
-                                </p>
-                              </div>
-                            )}
-                             {!recipeResult.techniques && recipeResult.detailedAnalysis?.techniqueGuidance?.baking && (
-                              <div className="space-y-2">
-                                <h4 className="text-sm font-medium flex items-center gap-2">
-                                  <CookingPot className="h-4 w-4" /> Baking
-                                </h4>
-                                <p className="text-sm text-muted-foreground pl-6">
-                                  {recipeResult.detailedAnalysis.techniqueGuidance.baking}
-                                </p>
-                              </div>
-                            )}
-                          </div>
-                        )}
+                        <div className="space-y-4">
+                          {recipeResult.detailedAnalysis?.techniqueGuidance?.mixing && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <Blend className="h-5 w-5" />
+                                Mixing
+                              </h3>
+                              <p className="text-muted-foreground leading-relaxed">{recipeResult.detailedAnalysis.techniqueGuidance.mixing}</p>
+                            </div>
+                          )}
+                          
+                          {recipeResult.detailedAnalysis?.techniqueGuidance?.folding && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <Layers className="h-5 w-5" />
+                                Folding
+                              </h3>
+                              <p className="text-muted-foreground leading-relaxed">{recipeResult.detailedAnalysis.techniqueGuidance.folding}</p>
+                            </div>
+                          )}
+                          
+                          {recipeResult.detailedAnalysis?.techniqueGuidance?.shaping && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <Hand className="h-5 w-5" />
+                                Shaping
+                              </h3>
+                              <p className="text-muted-foreground leading-relaxed">{recipeResult.detailedAnalysis.techniqueGuidance.shaping}</p>
+                            </div>
+                          )}
+                          
+                          {recipeResult.detailedAnalysis?.techniqueGuidance?.baking && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <CookingPot className="h-5 w-5" />
+                                Baking
+                              </h3>
+                              <p className="text-muted-foreground leading-relaxed">{recipeResult.detailedAnalysis.techniqueGuidance.baking}</p>
+                            </div>
+                          )}
+                        </div>
                       </TabsContent>
                     </Tabs>
                   </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">Calculate your recipe to see the technical analysis.</p>
-                )}
+                ) : null}
               </CardContent>
             </Card>
           </div>
