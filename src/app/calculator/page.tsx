@@ -1,5 +1,6 @@
 // Import the main calculator component
 import { DoughCalculator } from '@/components/DoughCalculator'
+import { Suspense } from 'react'
 // import { TestSelect } from '@/components/calculator/TestSelect'
 
 export const metadata = {
@@ -12,7 +13,9 @@ export default function CalculatorPage() {
 
   return (
     <main className="container py-8">
-      <DoughCalculator />
+      <Suspense fallback={<div className="flex items-center justify-center min-h-[50vh]">Loading calculator...</div>}>
+        <DoughCalculator />
+      </Suspense>
     </main>
   )
 }
