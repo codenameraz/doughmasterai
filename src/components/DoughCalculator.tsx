@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -35,6 +35,7 @@ import {
 import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useSearchParams } from 'next/navigation';
 
 // --- Interfaces ---
 interface YeastInfo { type: "fresh" | "active dry" | "instant"; percentage: number; }
@@ -613,10 +614,21 @@ const formatTemperature = (temp: number | undefined, unit: 'C' | 'F'): string =>
 };
 
 export function DoughCalculator() {
+  // Define URL params at the very top
+  const searchParams = useSearchParams();
+  const initialStyleFromUrl = searchParams.get('style') as PizzaStyleValue | null;
+  // Validate the style from URL
+  const isValidInitialStyle = initialStyleFromUrl && 
+    PIZZA_STYLE_OPTIONS.some(option => option.value === initialStyleFromUrl);
+  
   // --- State ---
+  const [error, setError] = useState<string | null>(null);
   const [doughBalls, setDoughBalls] = useState<string>('4');
   const [weightPerBall, setWeightPerBall] = useState<string>('250');
-  const [selectedStyle, setSelectedStyle] = useState<PizzaStyleValue>('neapolitan');
+  const [selectedStyle, setSelectedStyle] = useState<PizzaStyleValue>(
+    isValidInitialStyle ? initialStyleFromUrl : 'neapolitan'
+  );
+  console.log('Initial style set to:', isValidInitialStyle ? initialStyleFromUrl : 'neapolitan', 'from URL param:', initialStyleFromUrl);
   const [altitude, setAltitude] = useState('');
   const [ovenType, setOvenType] = useState<OvenType>('home');
 
@@ -634,7 +646,6 @@ export function DoughCalculator() {
 
   // API State
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
   const [recipeResult, setRecipeResult] = useState<ApiResponse | null>(null);
   const [isCalculated, setIsCalculated] = useState<boolean>(false);
 
@@ -643,7 +654,7 @@ export function DoughCalculator() {
   const [defaultFermentationType] = useState<'room' | 'cold' | 'custom'>('room');
 
   // Add to State section
-  const [fermentationTime, setFermentationTime] = useState<FermentationType>('same-day');
+  const [fermentationTime, setFermentationTime] = useState<FermentationType>('overnight');
   const [targetDate, setTargetDate] = useState<Date>();
 
   // Add this inside the DoughCalculator component, near other state
@@ -661,8 +672,30 @@ export function DoughCalculator() {
   const [roomTemp, setRoomTemp] = useState<string>('72'); // Default to 72°F
   const [tempUnit, setTempUnit] = useState<'C' | 'F'>('F'); // Default to Fahrenheit
 
+  // Add a ref to track if initial URL param has been applied
+  const initialUrlParamApplied = useRef(false);
+
   // --- Effects ---
+  // Add effect to read style from URL params - we now only need this for changes after initial mount
   useEffect(() => {
+    if (!initialUrlParamApplied.current) {
+      initialUrlParamApplied.current = true;
+      return; // Skip first run since we handle initial value in useState
+    }
+    
+    const styleParam = searchParams.get('style');
+    if (styleParam) {
+      // Check if the style from URL is valid
+      const isValidStyle = PIZZA_STYLE_OPTIONS.some(option => option.value === styleParam);
+      if (isValidStyle && styleParam !== selectedStyle) {
+        console.log('Updating style from URL param change:', styleParam);
+        setSelectedStyle(styleParam as PizzaStyleValue);
+      }
+    }
+  }, [searchParams, selectedStyle]);
+
+  useEffect(() => {
+    // Skip this effect if we're still initializing from URL params
     const isCustom = selectedStyle === 'custom';
     setIsCustomStyle(isCustom);
     setRecipeResult(null);
@@ -681,7 +714,7 @@ export function DoughCalculator() {
           setOil(CUSTOM_DEFAULTS.oil);
       }
       // Reset custom flour settings when switching away from custom style
-        setAddSecondaryFlour(false);
+      setAddSecondaryFlour(false);
       setPrimaryFlourPercentage(100);
     }
   }, [selectedStyle, ovenType]);
@@ -1142,6 +1175,7 @@ export function DoughCalculator() {
                     <Select 
                       value={selectedStyle} 
                       onValueChange={(v) => {
+                        console.log('Style changed to:', v);
                         setSelectedStyle(v as PizzaStyleValue);
                         resetState();
                         trackEvent('style_selected', { style: v });
