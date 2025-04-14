@@ -1062,15 +1062,29 @@ export function DoughCalculator() {
       // Safely parse the JSON response
       let data;
       try {
-        data = await response.json();
+        const responseText = await response.text();
+        try {
+          // First try to parse the response text
+          data = JSON.parse(responseText);
+        } catch (jsonError) {
+          console.error('Error parsing JSON response:', jsonError);
+          console.error('Raw response:', responseText);
+          throw new Error('Invalid JSON format from API');
+        }
       } catch (parseError) {
-        console.error('Error parsing JSON response:', parseError);
-        throw new Error('Invalid response format from API');
+        console.error('Error reading response body:', parseError);
+        throw new Error('Failed to read API response');
       }
 
+      // Verify the response is an object with required fields
       if (!data || typeof data !== 'object') {
         console.error('Invalid API response format:', data);
-        throw new Error('Invalid response format from API');
+        throw new Error('API response is not a valid object');
+      }
+
+      if (!data.flourRecommendation || !data.processTimeline) {
+        console.error('Missing required fields in API response:', data);
+        throw new Error('API response is missing required fields');
       }
 
       // Ensure all sections are properly populated

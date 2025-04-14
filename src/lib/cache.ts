@@ -38,8 +38,27 @@ class Cache {
    */
   public set(key: string, value: any, customTTL?: number): void {
     const ttl = customTTL ? customTTL * 1000 : this.DEFAULT_TTL;
+    
+    // Ensure the value is properly serialized to avoid storing objects directly
+    // which could lead to "[object Object]" errors when retrieved
+    let safeValue;
+    
+    if (typeof value === 'string') {
+      // If it's already a string, try to parse it to ensure it's valid JSON
+      try {
+        const parsed = JSON.parse(value);
+        safeValue = value; // It's valid JSON string, keep as is
+      } catch (e) {
+        // It's a string but not valid JSON, stringify it
+        safeValue = JSON.stringify(value);
+      }
+    } else {
+      // It's not a string, stringify the object
+      safeValue = JSON.stringify(value);
+    }
+    
     const entry: CacheEntry = {
-      value,
+      value: safeValue,
       timestamp: Date.now(),
       ttl
     }
@@ -61,6 +80,16 @@ class Cache {
       return null
     }
 
+    // Parse the stored value to ensure we return a proper object, not a string
+    if (typeof entry.value === 'string') {
+      try {
+        return JSON.parse(entry.value);
+      } catch (e) {
+        console.error('Failed to parse cache value:', e);
+        return null;
+      }
+    }
+    
     return entry.value
   }
 

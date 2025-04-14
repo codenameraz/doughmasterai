@@ -70,16 +70,22 @@ class RedisCache {
       
       if (!result) return null;
       
+      // Always ensure we return a properly parsed JSON object
       // Handle the result manually to avoid JSON parsing errors
       if (typeof result === 'string') {
         try {
           return JSON.parse(result) as T;
         } catch (e) {
-          return result as unknown as T;
+          console.error('Failed to parse Redis cache result', e);
+          // If we can't parse it, it's probably not a valid JSON
+          // Return null rather than an invalid string that would break the client
+          return null;
         }
+      } else {
+        // If it's not a string but an object, stringify then parse to ensure it's proper JSON
+        const safeResult = JSON.stringify(result);
+        return JSON.parse(safeResult) as T;
       }
-      
-      return result as T;
     } catch (error) {
       console.error('Redis cache get error:', error);
       return null;

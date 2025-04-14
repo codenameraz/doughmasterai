@@ -985,7 +985,20 @@ export async function POST(request: Request) {
         console.error('Memory cache set error:', memCacheError);
       }
 
-      return new Response(cleanedResponse, {
+      // Final validation to ensure we're returning a valid JSON string
+      let validResponse;
+      try {
+        // Parse and stringify to ensure it's a valid JSON string
+        const parsed = typeof cleanedResponse === 'string' 
+          ? JSON.parse(cleanedResponse) 
+          : cleanedResponse;
+        validResponse = JSON.stringify(parsed);
+      } catch (error) {
+        console.error('Error in final JSON validation:', error);
+        throw new Error('Invalid JSON structure in response');
+      }
+
+      return new Response(validResponse, {
         headers: { 
           'Content-Type': 'application/json',
           'Cache-Control': 'public, max-age=3600', // Cache for 1 hour
@@ -1000,13 +1013,16 @@ export async function POST(request: Request) {
     console.error('Error processing recipe:', error instanceof Error ? error.message : String(error));
     let errorMessage = error instanceof Error ? error.message : 'Failed to process recipe';
     
-    // For all errors, return a user-friendly response that also allows for retry
-    return new Response(JSON.stringify({
+    // Create the error response object
+    const errorResponse = {
       error: 'The recipe calculation service is currently busy. Please try again in a moment.',
       isTimeout: errorMessage.includes('timeout') || errorMessage.includes('processing took too long'),
       retryAfter: 10, // Suggest client retry after 10 seconds
       message: errorMessage
-    }), {
+    };
+    
+    // Ensure we're returning valid JSON
+    return new Response(JSON.stringify(errorResponse), {
       status: 503, // Service Unavailable status code
       headers: { 
         'Content-Type': 'application/json',
