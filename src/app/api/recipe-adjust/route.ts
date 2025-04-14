@@ -7,7 +7,7 @@ import { redisCache } from '@/lib/redisCache'
 
 // Enable edge runtime and set timeout
 export const runtime = 'edge';
-export const maxDuration = 120;
+export const maxDuration = 25; // Reduced from 120 to 25 seconds to match the Vercel limit
 
 // Add oven type constants
 const OVEN_TYPES = {
@@ -850,7 +850,7 @@ const makeCompletion = async (prompt: string) => {
     max_tokens: 3072,
   }, {
     headers: {
-      'HTTP-Referer': 'http://localhost:3000',
+      'HTTP-Referer': process.env.NEXTAUTH_URL || 'https://doughmasterai.com',
       'X-Title': 'Pizza Dough Calculator'
     }
   });
@@ -859,9 +859,9 @@ const makeCompletion = async (prompt: string) => {
 // Export API route handler
 export async function POST(request: Request) {
   try {
-    // Add timeout for the entire request
+    // Add timeout for the entire request - reduced to match Vercel's 25s limit
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Request timeout - processing took too long')), 110000);
+      setTimeout(() => reject(new Error('Request timeout - processing took too long')), 20000);
     });
     
     const processingPromise = (async () => {
@@ -869,102 +869,123 @@ export async function POST(request: Request) {
       console.log('API request payload:', JSON.stringify(data, null, 2));
       
       // Rate limiting check
-      if (!await rateLimiter.checkRateLimit()) {
-        return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }), {
-          status: 429,
-          headers: { 'Content-Type': 'application/json' },
-        });
+      try {
+        if (!await rateLimiter.checkRateLimit()) {
+          return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }), {
+            status: 429,
+            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+          });
+        }
+      } catch (error) {
+        console.error('Rate limit check error:', error);
+        // Continue without rate limiting if it fails
       }
 
       // Generate a unique cache key based on the request data
       const cacheKey = JSON.stringify(data);
       
-      // Try Redis cache first (persistent across server instances)
-      let cachedResult = await redisCache.get<string>(cacheKey);
+      // Try Redis cache first if available
+      let cachedResult = null;
+      try {
+        cachedResult = await redisCache.get<string>(cacheKey);
+      } catch (redisError) {
+        console.error('Redis cache error:', redisError);
+        // Continue without Redis if it fails
+      }
       
       // If not in Redis, try in-memory cache
       if (!cachedResult) {
-        cachedResult = cache.get(cacheKey);
+        try {
+          cachedResult = cache.get(cacheKey);
+        } catch (memCacheError) {
+          console.error('Memory cache error:', memCacheError);
+          // Continue without cache if it fails
+        }
       }
       
       if (cachedResult) {
         console.log('Cache hit - returning cached result');
         return new Response(cachedResult, {
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Cache-Control': 'public, max-age=3600', // Cache for 1 hour
+          },
         });
       }
 
       // Prepare the prompt with the recipe data
       const prompt = PROMPT_TEMPLATE(data);
 
-      console.log('Sending prompt to API:', prompt);
+      console.log('Sending prompt to API...');
 
       // Make API call with retry logic - increase retries and reduce delay for quicker fallbacks
       const completion = await withRetry(async () => {
         try {
-          console.log('Attempting API call with prompt:', prompt);
           const response = await makeCompletion(prompt);
-          console.log('Raw API response:', response);
           
           if (!response.choices?.[0]?.message?.content) {
-            console.error('API response missing content:', response);
+            console.error('API response missing content');
             throw new Error('No content in API response');
           }
         
           return response;
         } catch (error) {
-          console.error('API call error:', error);
-          if (error instanceof Error) {
-            console.error('Error details:', {
-              message: error.message,
-              name: error.name,
-              stack: error.stack
-            });
-          }
+          console.error('API call error:', error instanceof Error ? error.message : String(error));
           throw error;
         }
-      }, 4, 500); // Increase retries to 4, reduce initial delay to 500ms
+      }, 2, 500); // Reduce retries to 2 to stay within time limit
       
       const content = completion.choices[0].message.content;
       if (!content) {
         throw new Error('No content in API response');
       }
 
-      console.log('Raw API Response:', content);
-
       // Clean and validate the response
       let cleanedResponse;
       try {
         cleanedResponse = cleanResponse(content, data);
-        console.log('Cleaned response:', cleanedResponse);
       } catch (error) {
         const cleanError = error as Error;
-        console.error('Error cleaning response:', cleanError);
+        console.error('Error cleaning response:', cleanError.message);
         throw new Error(`Failed to clean API response: ${cleanError.message}`);
       }
 
       let result;
       try {
         result = JSON.parse(cleanedResponse);
-        console.log('Parsed result:', JSON.stringify(result, null, 2));
       } catch (error) {
         const parseError = error as Error;
-        console.error('Error parsing cleaned response:', parseError);
+        console.error('Error parsing cleaned response:', parseError.message);
         throw new Error(`Failed to parse cleaned response: ${parseError.message}`);
       }
 
       if (!result.flourRecommendation || !result.processTimeline || !result.temperatureAnalysis) {
-        console.error('Missing required fields in response:', result);
+        console.error('Missing required fields in response');
         throw new Error('Response missing required fields');
       }
 
       // Cache the result in both Redis (persistent) and memory (fast)
-      await redisCache.set(cacheKey, cleanedResponse, 60 * 60 * 24 * 7); // 7 days in seconds
-      cache.set(cacheKey, cleanedResponse);
-      console.log('Response cached with key:', cacheKey);
+      try {
+        await redisCache.set(cacheKey, cleanedResponse, 60 * 60 * 24 * 7); // 7 days in seconds
+      } catch (redisCacheError) {
+        console.error('Redis cache set error:', redisCacheError);
+        // Continue without Redis cache if it fails
+      }
+      
+      try {
+        cache.set(cacheKey, cleanedResponse);
+      } catch (memCacheError) {
+        console.error('Memory cache set error:', memCacheError);
+        // Continue without memory cache if it fails
+      }
+      
+      console.log('Response cached successfully');
 
       return new Response(cleanedResponse, {
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=3600', // Cache for 1 hour 
+        },
       });
     })();
     
@@ -972,27 +993,32 @@ export async function POST(request: Request) {
     return await Promise.race([processingPromise, timeoutPromise]) as Response;
     
   } catch (error) {
-    console.error('Error processing recipe:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Failed to process recipe';
-    const errorResponse = {
-      error: errorMessage,
-      details: error instanceof Error ? error.stack : undefined
-    };
+    console.error('Error processing recipe:', error instanceof Error ? error.message : String(error));
+    let errorMessage = error instanceof Error ? error.message : 'Failed to process recipe';
     
     // If it's a timeout error, return a 504 status
     if (errorMessage.includes('timeout')) {
       return new Response(JSON.stringify({
-        error: 'Request timed out. Please try again or use simpler recipe parameters.',
+        error: 'The calculation is taking too long. Please try again with simpler recipe parameters.',
         isTimeout: true
       }), {
         status: 504,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-store' 
+        },
       });
     }
     
-    return new Response(JSON.stringify(errorResponse), {
+    // For all other errors
+    return new Response(JSON.stringify({
+      error: errorMessage,
+    }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store' 
+      },
     });
   }
 } 

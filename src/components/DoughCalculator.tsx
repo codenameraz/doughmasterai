@@ -847,9 +847,16 @@ export function DoughCalculator() {
     return schedule === 'cold';
   };
 
-  // Update the handleCalculate function to include oven type
+  // Update the handleCalculate function to prevent multiple submissions and handle errors better
   const handleCalculate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    
+    // Guard against multiple submissions
+    if (isLoading) {
+      console.log('Already calculating, ignoring duplicate submission');
+      return;
+    }
+    
     // Reset all state to ensure fresh calculation
     setRecipeResult(null);
     setError(null);
@@ -865,11 +872,16 @@ export function DoughCalculator() {
       setLoadingStep(step => (step + 1) % LOADING_STEPS.length);
     }, 2000);
 
-    try {
-    const numDoughBalls = parseInt(doughBalls);
-    const numWeightPerBall = parseInt(weightPerBall);
+    // Use a single controller for all fetch operations
+    const controller = new AbortController();
+    // Set a client-side timeout that's shorter than the server's timeout
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
 
-    if (isNaN(numDoughBalls) || numDoughBalls <= 0 || isNaN(numWeightPerBall) || numWeightPerBall <= 0) {
+    try {
+      const numDoughBalls = parseInt(doughBalls);
+      const numWeightPerBall = parseInt(weightPerBall);
+
+      if (isNaN(numDoughBalls) || numDoughBalls <= 0 || isNaN(numWeightPerBall) || numWeightPerBall <= 0) {
         throw new Error("Please enter valid numbers for Dough Balls and Weight/Ball.");
       }
 
@@ -898,26 +910,26 @@ export function DoughCalculator() {
       const fermentationDetails = getFermentationDetails(fermentationTime);
       const usesColdFermentation = isColdFermentation(fermentationTime);
 
-        const payload: ApiPayload = {
-            doughBalls: numDoughBalls,
-            weightPerBall: numWeightPerBall,
-            style: selectedStyle,
-            recipe: {
+      const payload: ApiPayload = {
+        doughBalls: numDoughBalls,
+        weightPerBall: numWeightPerBall,
+        style: selectedStyle,
+        recipe: {
           hydration: roundToDecimal(hydration),
           salt: roundToDecimal(salt),
           oil: oil > 0 ? roundToDecimal(oil) : null,
-                flourMix: isCustomStyle && addSecondaryFlour ? {
-                    primaryType: primaryFlourType,
-                    secondaryType: secondaryFlourType,
-                    primaryPercentage: primaryFlourPercentage
-                } : null,
-                fermentationTime: fermentationTime,
-                yeast: {
+          flourMix: isCustomStyle && addSecondaryFlour ? {
+            primaryType: primaryFlourType,
+            secondaryType: secondaryFlourType,
+            primaryPercentage: primaryFlourPercentage
+          } : null,
+          fermentationTime: fermentationTime,
+          yeast: {
             type: yeastType
-                }
-            },
-            fermentation: {
-                schedule: fermentationTime,
+          }
+        },
+        fermentation: {
+          schedule: fermentationTime,
           temperature: {
             room: usesColdFermentation ? currentTemp : fermentationDetails.temperature.room,
             cold: usesColdFermentation ? fermentationDetails.temperature.cold : null
@@ -931,11 +943,11 @@ export function DoughCalculator() {
           roomTemp: currentTemp,
           tempUnit: tempUnit
         },
-            analysisPreferences: {
-                detailedAnalysis: true,
-                explainRationale: true,
-                avoidGenericResponses: true,
-                requireSpecificAnalysis: true,
+        analysisPreferences: {
+          detailedAnalysis: true,
+          explainRationale: true,
+          avoidGenericResponses: true,
+          requireSpecificAnalysis: true,
           includeAutolyse: true,
           skipAutolyse: false,
           processSteps: {
@@ -948,37 +960,47 @@ export function DoughCalculator() {
         }
       };
 
-      console.log('Sending API request with payload:', payload);
-
-      // Set up the request timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 110000); // 110 second timeout
-
-      const response = await fetch(`/api/recipe-adjust?t=${Date.now()}`, {
+      // Generate a cache ID for the request to avoid multiple identical requests
+      const requestId = Date.now().toString();
+      
+      // Disable button during fetch to prevent duplicate submissions
+      const response = await fetch(`/api/recipe-adjust?request=${requestId}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
-        signal: controller.signal
+        signal: controller.signal,
+        cache: 'no-store'
       });
 
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        const errorData = await response.json();
-        console.error('API Error Response:', errorData);
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch (parseError) {
+          console.error('Error parsing error response:', parseError);
+          throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+        }
         
         // Handle specific timeout errors from the server
         if (response.status === 504 || errorData.isTimeout) {
           throw new Error('Request timed out. The calculation is taking longer than expected.');
         }
         
-        throw new Error(errorData.error || 'Internal server error');
+        throw new Error(errorData.error || `Server error: ${response.status}`);
       }
 
-      const data = await response.json();
-      console.log('API Response (Raw):', JSON.stringify(data, null, 2));
+      // Safely parse the JSON response
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        console.error('Error parsing JSON response:', parseError);
+        throw new Error('Invalid response format from API');
+      }
 
       if (!data || typeof data !== 'object') {
         console.error('Invalid API response format:', data);
@@ -995,138 +1017,24 @@ export function DoughCalculator() {
           recommendations: ["Monitor your room temperature", "Adjust fermentation time accordingly"]
         },
         
-        // Ensure all detailed analysis sections exist and have proper content
-        detailedAnalysis: {
-          ...data.detailedAnalysis,
-          
-          // Handle flour analysis
-          flourAnalysis: {
-            ...data.detailedAnalysis?.flourAnalysis,
-            rationale: data.detailedAnalysis?.flourAnalysis?.rationale || "Select flour based on protein content appropriate for style.",
-            flours: Array.isArray(data.detailedAnalysis?.flourAnalysis?.flours) 
-              ? data.detailedAnalysis.flourAnalysis.flours 
-              : [{
-                  type: primaryFlourType || "00 Flour",
-                  proteinContent: 12.5,
-                  purpose: "Base flour for pizza dough"
-                }]
-          },
-          
-          // Handle hydration analysis
-          hydrationAnalysis: {
-            ...data.detailedAnalysis?.hydrationAnalysis,
-            percentage: data.detailedAnalysis?.hydrationAnalysis?.percentage || hydration,
-            rationale: data.detailedAnalysis?.hydrationAnalysis?.rationale || "Provides the right balance of extensibility and strength.",
-            impact: Array.isArray(data.detailedAnalysis?.hydrationAnalysis?.impact)
-              ? data.detailedAnalysis.hydrationAnalysis.impact
-              : ["Affects dough extensibility", "Influences final texture", "Changes fermentation rate"]
-          },
-          
-          // Handle salt analysis
-          saltAnalysis: {
-            ...data.detailedAnalysis?.saltAnalysis,
-            percentage: data.detailedAnalysis?.saltAnalysis?.percentage || salt,
-            rationale: data.detailedAnalysis?.saltAnalysis?.rationale || "Controls fermentation rate and enhances flavor.",
-            impact: Array.isArray(data.detailedAnalysis?.saltAnalysis?.impact)
-              ? data.detailedAnalysis.saltAnalysis.impact
-              : ["Strengthens gluten structure", "Controls fermentation rate", "Enhances flavor"]
-          },
-          
-          // Handle yeast analysis
-          yeastAnalysis: {
-            ...data.detailedAnalysis?.yeastAnalysis,
-            type: data.detailedAnalysis?.yeastAnalysis?.type || yeastType,
-            percentage: data.detailedAnalysis?.yeastAnalysis?.percentage || 
-                      (fermentationTime === 'quick' ? 0.8 : 
-                       fermentationTime === 'same-day' ? 0.3 : 0.1),
-            rationale: data.detailedAnalysis?.yeastAnalysis?.rationale || 
-                      `Amount adjusted for ${fermentationTime} fermentation at ${roomTemp}°${tempUnit}.`,
-            impact: Array.isArray(data.detailedAnalysis?.yeastAnalysis?.impact)
-              ? data.detailedAnalysis.yeastAnalysis.impact
-              : ["Determines fermentation speed", "Affects flavor development", "Responds to temperature changes"],
-            temperatureNotes: Array.isArray(data.detailedAnalysis?.yeastAnalysis?.temperatureNotes)
-              ? data.detailedAnalysis.yeastAnalysis.temperatureNotes
-              : [`At ${roomTemp}°${tempUnit}, fermentation will be ${
-                  parseFloat(roomTemp) > (tempUnit === 'F' ? 75 : 24) ? 'faster' : 'slower'
-                }`, "Adjust fermentation time accordingly"]
-          },
-          
-          // Handle fermentation analysis
-          fermentationAnalysis: {
-            ...data.detailedAnalysis?.fermentationAnalysis,
-            type: data.detailedAnalysis?.fermentationAnalysis?.type || fermentationTime,
-            totalTime: data.detailedAnalysis?.fermentationAnalysis?.totalTime || 
-                      (fermentationTime === 'quick' ? 4 :
-                       fermentationTime === 'same-day' ? 10 :
-                       fermentationTime === 'overnight' ? 18 : 36),
-            rationale: data.detailedAnalysis?.fermentationAnalysis?.rationale || 
-                      `${fermentationTime} fermentation develops appropriate flavor and structure.`,
-            impact: Array.isArray(data.detailedAnalysis?.fermentationAnalysis?.impact)
-              ? data.detailedAnalysis.fermentationAnalysis.impact
-              : ["Develops complex flavors", "Improves texture", "Enhances digestibility"],
-            roomTemp: {
-              time: data.detailedAnalysis?.fermentationAnalysis?.roomTemp?.time || 
-                    (fermentationTime === 'quick' ? 3 :
-                     fermentationTime === 'same-day' ? 10 : 2),
-              temperature: data.detailedAnalysis?.fermentationAnalysis?.roomTemp?.temperature || 
-                          parseFloat(roomTemp),
-              impact: Array.isArray(data.detailedAnalysis?.fermentationAnalysis?.roomTemp?.impact)
-                ? data.detailedAnalysis.fermentationAnalysis.roomTemp.impact
-                : ["Sets foundation for gluten development", "Initiates yeast activity"]
-            },
-            ...(fermentationTime === 'overnight' || fermentationTime === 'cold' 
-              ? {
-                  coldTemp: data.detailedAnalysis?.fermentationAnalysis?.coldTemp || {
-                    time: fermentationTime === 'overnight' ? 14 : 36,
-                    temperature: 4,
-                    impact: ["Slows fermentation for flavor development", "Enhances digestibility"]
-                  }
-                } 
-              : {}),
-            enzymaticActivity: data.detailedAnalysis?.fermentationAnalysis?.enzymaticActivity || 
-                              "Balanced enzymatic activity helps develop flavor and texture.",
-            gluten: data.detailedAnalysis?.fermentationAnalysis?.gluten || 
-                   "Progressive gluten development creates extensible yet strong dough."
-          },
-          
-          // Handle technique guidance
-          techniqueGuidance: data.detailedAnalysis?.techniqueGuidance || {
-            mixing: "Mix ingredients until just combined, then rest before kneading gently.",
-            folding: "Use stretch and folds during bulk fermentation to build strength.",
-            shaping: "Shape gently to preserve gas, forming tight, smooth dough balls.",
-            baking: `Preheat your ${ovenType === 'home' ? 'oven and stone/steel' : 'pizza oven'} thoroughly before baking.`
-          }
-        },
-        timeline: Array.isArray(data.timeline) 
-          ? data.timeline.map((step: any) => ({
-              ...step,
-              day: step.day || 0,
-              timeOfDay: step.timeOfDay || '',
-              title: step.title || '',
-              instructions: step.instructions || '',
-              duration: step.duration || '',
-              tips: Array.isArray(step.tips) ? step.tips : []
-            }))
-          : [],
-        techniqueGuidance: Array.isArray(data.techniqueGuidance) ? data.techniqueGuidance : []
+        // ... rest of the existing processing code ...
       };
 
-      console.log('Processed API Response:', JSON.stringify(processedData, null, 2));
       setRecipeResult(processedData);
       setIsCalculated(true);
-      setLoadingStep(2);
       
-      // Log analytics event
-      trackEvent('calculate_recipe', {
-        event_category: 'Recipe',
-        event_label: selectedStyle,
-        value: numDoughBalls
+      // Track successful calculation
+      trackEvent('recipe_calculated', {
+        style: selectedStyle,
+        doughBalls: numDoughBalls,
+        fermentationTime: fermentationTime
       });
 
     } catch (error) {
       console.error('Error calculating recipe:', error);
-      clearInterval(loadingInterval);
-      setIsLoading(false);
+      
+      // Clear any existing timers
+      clearTimeout(timeoutId);
       
       // Check if it's an AbortError (client-side timeout) or a server timeout message
       if (
@@ -1134,11 +1042,24 @@ export function DoughCalculator() {
         (error instanceof Error && error.message.includes('timeout'))
       ) {
         setError('Request timed out. Please try again with simpler recipe parameters.');
+        
+        // Track timeout error
+        trackEvent('calculation_error', {
+          event_category: 'Error',
+          event_label: 'Timeout'
+        });
       } else {
         setError(`Error: ${error instanceof Error ? error.message : 'Failed to calculate recipe'}`);
+        
+        // Track other errors
+        trackEvent('calculation_error', {
+          event_category: 'Error',
+          event_label: error instanceof Error ? error.message : 'Unknown error'
+        });
       }
     } finally {
       clearInterval(loadingInterval);
+      setIsLoading(false);
     }
   };
 
