@@ -1,37 +1,175 @@
-import { Redis } from '@upstash/redis'
-
-if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
-  throw new Error('Redis environment variables not set')
+type CacheEntry = {
+  value: any
+  timestamp: number
+  ttl?: number // Optional custom TTL for each entry
 }
 
-export const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
-})
+class Cache {
+  private static instance: Cache
+  private cache: Map<string, CacheEntry>
+  private readonly DEFAULT_TTL: number // Default TTL in milliseconds
+  private readonly CACHE_CLEANUP_INTERVAL: number // Interval for cleaning expired entries
+  private cleanupInterval: NodeJS.Timeout | null = null
 
-export const cache = {
-  async get(key: string): Promise<string | null> {
-    try {
-      return await redis.get(key)
-    } catch (error) {
-      console.error('Cache get error:', error)
+  private constructor() {
+    this.cache = new Map()
+    this.DEFAULT_TTL = 1000 * 60 * 60 * 24 // 24 hours by default
+    this.CACHE_CLEANUP_INTERVAL = 1000 * 60 * 15 // Clean up every 15 minutes
+    
+    // Initialize with saved cache if in a browser environment
+    this.loadFromStorage()
+    
+    // Start the cleanup interval
+    this.startCleanupInterval()
+  }
+
+  public static getInstance(): Cache {
+    if (!Cache.instance) {
+      Cache.instance = new Cache()
+    }
+    return Cache.instance
+  }
+
+  public set(key: string, value: any, customTTL?: number): void {
+    const ttl = customTTL || this.DEFAULT_TTL
+    const entry: CacheEntry = {
+      value,
+      timestamp: Date.now(),
+      ttl
+    }
+    
+    this.cache.set(key, entry)
+    this.saveToStorage()
+  }
+
+  public get(key: string): any | null {
+    const entry = this.cache.get(key)
+    if (!entry) return null
+
+    const ttl = entry.ttl || this.DEFAULT_TTL
+    
+    // Check if entry has expired
+    if (Date.now() - entry.timestamp > ttl) {
+      this.cache.delete(key)
+      this.saveToStorage()
       return null
     }
-  },
 
-  async set(key: string, value: string, expirySeconds: number): Promise<void> {
-    try {
-      await redis.set(key, value, { ex: expirySeconds })
-    } catch (error) {
-      console.error('Cache set error:', error)
+    return entry.value
+  }
+
+  public getWithTimestamp(key: string): { value: any, age: number } | null {
+    const entry = this.cache.get(key)
+    if (!entry) return null
+
+    const ttl = entry.ttl || this.DEFAULT_TTL
+    
+    // Check if entry has expired
+    if (Date.now() - entry.timestamp > ttl) {
+      this.cache.delete(key)
+      this.saveToStorage()
+      return null
     }
-  },
 
-  async del(key: string): Promise<void> {
-    try {
-      await redis.del(key)
-    } catch (error) {
-      console.error('Cache delete error:', error)
+    return {
+      value: entry.value,
+      age: Date.now() - entry.timestamp
     }
   }
-} 
+
+  public has(key: string): boolean {
+    const entry = this.cache.get(key)
+    if (!entry) return false
+
+    const ttl = entry.ttl || this.DEFAULT_TTL
+    
+    // Check if entry has expired
+    if (Date.now() - entry.timestamp > ttl) {
+      this.cache.delete(key)
+      this.saveToStorage()
+      return false
+    }
+
+    return true
+  }
+
+  public delete(key: string): boolean {
+    const result = this.cache.delete(key)
+    if (result) {
+      this.saveToStorage()
+    }
+    return result
+  }
+
+  public clear(): void {
+    this.cache.clear()
+    this.saveToStorage()
+  }
+
+  private cleanup(): void {
+    const now = Date.now()
+    let hasChanges = false
+    
+    for (const [key, entry] of this.cache.entries()) {
+      const ttl = entry.ttl || this.DEFAULT_TTL
+      if (now - entry.timestamp > ttl) {
+        this.cache.delete(key)
+        hasChanges = true
+      }
+    }
+    
+    if (hasChanges) {
+      this.saveToStorage()
+    }
+  }
+
+  private startCleanupInterval(): void {
+    if (typeof window !== 'undefined' && !this.cleanupInterval) {
+      this.cleanupInterval = setInterval(() => {
+        this.cleanup()
+      }, this.CACHE_CLEANUP_INTERVAL)
+    }
+  }
+
+  private stopCleanupInterval(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval)
+      this.cleanupInterval = null
+    }
+  }
+
+  private saveToStorage(): void {
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      try {
+        const serialized: Record<string, CacheEntry> = {}
+        this.cache.forEach((value, key) => {
+          serialized[key] = value
+        })
+        localStorage.setItem('app_cache', JSON.stringify(serialized))
+      } catch (error) {
+        console.error('Error saving cache to localStorage:', error)
+      }
+    }
+  }
+
+  private loadFromStorage(): void {
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      try {
+        const serialized = localStorage.getItem('app_cache')
+        if (serialized) {
+          const parsed = JSON.parse(serialized) as Record<string, CacheEntry>
+          Object.entries(parsed).forEach(([key, entry]) => {
+            this.cache.set(key, entry)
+          })
+          
+          // Immediately clean up any expired entries
+          this.cleanup()
+        }
+      } catch (error) {
+        console.error('Error loading cache from localStorage:', error)
+      }
+    }
+  }
+}
+
+export const cache = Cache.getInstance() 

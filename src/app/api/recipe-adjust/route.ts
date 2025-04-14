@@ -3,10 +3,11 @@ import { NextResponse } from 'next/server'
 import { PIZZA_STYLES } from '@/lib/openai/config'
 import { cache } from '@/lib/cache'
 import { rateLimiter } from '@/lib/rateLimiter'
+import { redisCache } from '@/lib/redisCache'
 
 // Enable edge runtime and set timeout
 export const runtime = 'edge';
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 // Add oven type constants
 const OVEN_TYPES = {
@@ -51,7 +52,7 @@ const MODEL = 'google/gemma-3-12b-it:free'
 const openai = new OpenAI({
   baseURL: 'https://openrouter.ai/api/v1',
   apiKey: process.env.OPENROUTER_API_KEY || '',
-  timeout: 60000, // 60 second timeout
+  timeout: 110000, // Increase from 60 to 110 seconds
   defaultHeaders: {
     'HTTP-Referer': 'http://localhost:3000',
     'X-Title': 'Pizza Dough Calculator'
@@ -855,107 +856,121 @@ const makeCompletion = async (prompt: string) => {
   });
 };
 
-// Add cache key generator function
-function generateCacheKey(data: RecipeInput): string {
-  return `recipe:${data.style}:${data.doughBalls}:${data.weightPerBall}:${data.recipe.hydration}:${data.recipe.salt}:${data.recipe.oil}:${data.recipe.fermentationTime}:${data.environment.roomTemp}:${data.environment.ovenType}`;
-}
-
 // Export API route handler
 export async function POST(request: Request) {
   try {
-    const data: RecipeInput = await request.json();
-    console.log('API request payload:', JSON.stringify(data, null, 2));
+    // Add timeout for the entire request
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Request timeout - processing took too long')), 110000);
+    });
     
-    // Generate cache key
-    const cacheKey = generateCacheKey(data);
-    
-    // Try to get from cache first
-    const cachedResponse = await cache.get(cacheKey);
-    if (cachedResponse) {
-      console.log('Cache hit for:', cacheKey);
-      return NextResponse.json(JSON.parse(cachedResponse));
-    }
+    const processingPromise = (async () => {
+      const data: RecipeInput = await request.json();
+      console.log('API request payload:', JSON.stringify(data, null, 2));
+      
+      // Rate limiting check
+      if (!await rateLimiter.checkRateLimit()) {
+        return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }), {
+          status: 429,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
 
-    // Rate limiting check
-    if (!await rateLimiter.checkRateLimit()) {
-      return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }), {
-        status: 429,
+      // Generate a unique cache key based on the request data
+      const cacheKey = JSON.stringify(data);
+      
+      // Try Redis cache first (persistent across server instances)
+      let cachedResult = await redisCache.get<string>(cacheKey);
+      
+      // If not in Redis, try in-memory cache
+      if (!cachedResult) {
+        cachedResult = cache.get(cacheKey);
+      }
+      
+      if (cachedResult) {
+        console.log('Cache hit - returning cached result');
+        return new Response(cachedResult, {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      // Prepare the prompt with the recipe data
+      const prompt = PROMPT_TEMPLATE(data);
+
+      console.log('Sending prompt to API:', prompt);
+
+      // Make API call with retry logic - increase retries and reduce delay for quicker fallbacks
+      const completion = await withRetry(async () => {
+        try {
+          console.log('Attempting API call with prompt:', prompt);
+          const response = await makeCompletion(prompt);
+          console.log('Raw API response:', response);
+          
+          if (!response.choices?.[0]?.message?.content) {
+            console.error('API response missing content:', response);
+            throw new Error('No content in API response');
+          }
+        
+          return response;
+        } catch (error) {
+          console.error('API call error:', error);
+          if (error instanceof Error) {
+            console.error('Error details:', {
+              message: error.message,
+              name: error.name,
+              stack: error.stack
+            });
+          }
+          throw error;
+        }
+      }, 4, 500); // Increase retries to 4, reduce initial delay to 500ms
+      
+      const content = completion.choices[0].message.content;
+      if (!content) {
+        throw new Error('No content in API response');
+      }
+
+      console.log('Raw API Response:', content);
+
+      // Clean and validate the response
+      let cleanedResponse;
+      try {
+        cleanedResponse = cleanResponse(content, data);
+        console.log('Cleaned response:', cleanedResponse);
+      } catch (error) {
+        const cleanError = error as Error;
+        console.error('Error cleaning response:', cleanError);
+        throw new Error(`Failed to clean API response: ${cleanError.message}`);
+      }
+
+      let result;
+      try {
+        result = JSON.parse(cleanedResponse);
+        console.log('Parsed result:', JSON.stringify(result, null, 2));
+      } catch (error) {
+        const parseError = error as Error;
+        console.error('Error parsing cleaned response:', parseError);
+        throw new Error(`Failed to parse cleaned response: ${parseError.message}`);
+      }
+
+      if (!result.flourRecommendation || !result.processTimeline || !result.temperatureAnalysis) {
+        console.error('Missing required fields in response:', result);
+        throw new Error('Response missing required fields');
+      }
+
+      // Cache the result in both Redis (persistent) and memory (fast)
+      await redisCache.set(cacheKey, cleanedResponse, 60 * 60 * 24 * 7); // 7 days in seconds
+      cache.set(cacheKey, cleanedResponse);
+      console.log('Response cached with key:', cacheKey);
+
+      return new Response(cleanedResponse, {
         headers: { 'Content-Type': 'application/json' },
       });
-    }
-
-    // Prepare the prompt with the recipe data
-    const prompt = PROMPT_TEMPLATE(data);
-
-    console.log('Sending prompt to API:', prompt);
-
-    // Make API call with retry logic
-    const completion = await withRetry(async () => {
-      try {
-        console.log('Attempting API call with prompt:', prompt);
-        const response = await makeCompletion(prompt);
-        console.log('Raw API response:', response);
-        
-        if (!response.choices?.[0]?.message?.content) {
-          console.error('API response missing content:', response);
-          throw new Error('No content in API response');
-        }
-      
-      return response;
-      } catch (error) {
-        console.error('API call error:', error);
-        if (error instanceof Error) {
-          console.error('Error details:', {
-            message: error.message,
-            name: error.name,
-            stack: error.stack
-          });
-        }
-        throw error;
-      }
-    });
-
-    const content = completion.choices[0].message.content;
-    if (!content) {
-      throw new Error('No content in API response');
-    }
-
-    console.log('Raw API Response:', content);
-
-    // Clean and validate the response
-    let cleanedResponse;
-    try {
-      cleanedResponse = cleanResponse(content, data);
-    console.log('Cleaned response:', cleanedResponse);
-    } catch (error) {
-      const cleanError = error as Error;
-      console.error('Error cleaning response:', cleanError);
-      throw new Error(`Failed to clean API response: ${cleanError.message}`);
-    }
-
-    let result;
-    try {
-      result = JSON.parse(cleanedResponse);
-    console.log('Parsed result:', JSON.stringify(result, null, 2));
-    } catch (error) {
-      const parseError = error as Error;
-      console.error('Error parsing cleaned response:', parseError);
-      throw new Error(`Failed to parse cleaned response: ${parseError.message}`);
-    }
-
-    if (!result.flourRecommendation || !result.processTimeline || !result.temperatureAnalysis) {
-      console.error('Missing required fields in response:', result);
-      throw new Error('Response missing required fields');
-    }
-
-      // Cache the result
-    await cache.set(cacheKey, cleanedResponse);
-    console.log('Response cached with key:', cacheKey);
-
-    return new Response(cleanedResponse, {
-      headers: { 'Content-Type': 'application/json' },
-    });
-
+    })();
+    
+    // Race between the processing and timeout
+    return await Promise.race([processingPromise, timeoutPromise]) as Response;
+    
   } catch (error) {
     console.error('Error processing recipe:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to process recipe';
@@ -963,6 +978,18 @@ export async function POST(request: Request) {
       error: errorMessage,
       details: error instanceof Error ? error.stack : undefined
     };
+    
+    // If it's a timeout error, return a 504 status
+    if (errorMessage.includes('timeout')) {
+      return new Response(JSON.stringify({
+        error: 'Request timed out. Please try again or use simpler recipe parameters.',
+        isTimeout: true
+      }), {
+        status: 504,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    
     return new Response(JSON.stringify(errorResponse), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },

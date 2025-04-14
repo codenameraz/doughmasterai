@@ -439,12 +439,10 @@ interface LoadingStep {
 
 // Add this near other constants
 const LOADING_STEPS: LoadingStep[] = [
-  { icon: <Wheat className="h-4 w-4" />, text: "Measuring flour..." },
-  { icon: <Droplet className="h-4 w-4" />, text: "Adding water..." },
-  { icon: <CircleDot className="h-4 w-4" />, text: "Sprinkling salt..." },
-  { icon: <ChefHat className="h-4 w-4" />, text: "Mixing ingredients..." },
-  { icon: <Scale className="h-4 w-4" />, text: "Calculating ratios..." },
-  { icon: <Clock className="h-4 w-4" />, text: "Planning schedule..." },
+  { icon: <Wheat className="h-4 w-4" />, text: "Analyzing flour requirements..." },
+  { icon: <Droplet className="h-4 w-4" />, text: "Calculating optimal hydration..." },
+  { icon: <Clock className="h-4 w-4" />, text: "Determining fermentation schedule..." },
+  { icon: <ChefHat className="h-4 w-4" />, text: "Finalizing expert recommendations..." }
 ];
 
 // Add oven type constants
@@ -612,6 +610,29 @@ const formatTemperature = (temp: number | undefined, unit: 'C' | 'F'): string =>
   }
   return `${temp}°C`;
 };
+
+// Add a timeout component to handle long-running requests
+function RequestTimeoutAlert({ onRetry }: { onRetry: () => void }) {
+  return (
+    <Alert variant="destructive" className="mt-4">
+      <AlertCircle className="h-4 w-4" />
+      <AlertTitle>Request Timeout</AlertTitle>
+      <AlertDescription className="space-y-2">
+        <p>
+          The calculation is taking longer than expected. This could be due to server load or complex recipe parameters.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-2 mt-2">
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            Try Again
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
+            Reset Calculator
+          </Button>
+        </div>
+      </AlertDescription>
+    </Alert>
+  );
+}
 
 export function DoughCalculator() {
   // Define URL params at the very top
@@ -839,6 +860,11 @@ export function DoughCalculator() {
     setIsLoading(true);
     setLoadingStep(0);
 
+    // Set up loading animation
+    const loadingInterval = setInterval(() => {
+      setLoadingStep(step => (step + 1) % LOADING_STEPS.length);
+    }, 2000);
+
     try {
     const numDoughBalls = parseInt(doughBalls);
     const numWeightPerBall = parseInt(weightPerBall);
@@ -924,17 +950,30 @@ export function DoughCalculator() {
 
       console.log('Sending API request with payload:', payload);
 
-      const response = await fetch(`/api/recipe-adjust?t=${Date.now()}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-        body: JSON.stringify(payload),
-            });
+      // Set up the request timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 110000); // 110 second timeout
 
-            if (!response.ok) {
+      const response = await fetch(`/api/recipe-adjust?t=${Date.now()}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
         const errorData = await response.json();
         console.error('API Error Response:', errorData);
+        
+        // Handle specific timeout errors from the server
+        if (response.status === 504 || errorData.isTimeout) {
+          throw new Error('Request timed out. The calculation is taking longer than expected.');
+        }
+        
         throw new Error(errorData.error || 'Internal server error');
       }
 
@@ -1085,16 +1124,21 @@ export function DoughCalculator() {
       });
 
     } catch (error) {
-      console.error('Calculation error:', error);
-      setError(error instanceof Error ? error.message : 'An unexpected error occurred');
-      
-      // Log error event
-      trackEvent('calculation_error', {
-        event_category: 'Error',
-        event_label: error instanceof Error ? error.message : 'Unknown error'
-      });
-    } finally {
+      console.error('Error calculating recipe:', error);
+      clearInterval(loadingInterval);
       setIsLoading(false);
+      
+      // Check if it's an AbortError (client-side timeout) or a server timeout message
+      if (
+        error instanceof DOMException && error.name === 'AbortError' || 
+        (error instanceof Error && error.message.includes('timeout'))
+      ) {
+        setError('Request timed out. Please try again with simpler recipe parameters.');
+      } else {
+        setError(`Error: ${error instanceof Error ? error.message : 'Failed to calculate recipe'}`);
+      }
+    } finally {
+      clearInterval(loadingInterval);
     }
   };
 
@@ -1555,11 +1599,15 @@ export function DoughCalculator() {
 
         {/* Results Section */}
         {error && (
-          <Alert variant="destructive" className="mt-4">
-            <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Error</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+          error.includes('timeout') ? (
+            <RequestTimeoutAlert onRetry={() => handleCalculate(new Event('submit') as unknown as React.FormEvent<HTMLFormElement>)} />
+          ) : (
+            <Alert variant="destructive" className="mt-4">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Error</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )
         )}
 
         {isCalculated && recipeResult && (
