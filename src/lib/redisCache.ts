@@ -9,8 +9,24 @@ class RedisCache {
   private readonly DEFAULT_TTL = 60 * 60 * 24; // 24 hours in seconds
   private readonly PREFIX = 'recipe-cache:';
   private isConnected = false;
+  private connectionAttempted = false;
 
   constructor() {
+    // Defer Redis connection until first use
+    this.initRedisConnection();
+  }
+
+  /**
+   * Initialize Redis connection lazily
+   */
+  private initRedisConnection() {
+    // Skip if already attempted
+    if (this.connectionAttempted) {
+      return;
+    }
+
+    this.connectionAttempted = true;
+    
     try {
       const url = process.env.UPSTASH_REDIS_REST_URL;
       const token = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -24,9 +40,14 @@ class RedisCache {
         url,
         token,
         automaticDeserialization: false, // Disable auto deserialization to handle manually
+        retry: {
+          retries: 3,
+          backoff: (retryCount) => Math.min(Math.exp(retryCount) * 100, 3000),
+        }
       });
       
       this.isConnected = true;
+      console.log('Redis cache connected');
     } catch (error) {
       console.error('Failed to initialize Redis client:', error);
       this.redis = null;
@@ -167,6 +188,10 @@ class RedisCache {
    * @returns True if Redis is available, false otherwise
    */
   private isRedisAvailable(): boolean {
+    // Try to initialize Redis if not already done
+    if (!this.connectionAttempted) {
+      this.initRedisConnection();
+    }
     return this.redis !== null && this.isConnected;
   }
   

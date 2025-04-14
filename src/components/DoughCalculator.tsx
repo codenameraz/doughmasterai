@@ -635,6 +635,10 @@ function RequestTimeoutAlert({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+// Fix the console spam issue by moving the style logging to a dedicated hook
+// Define this outside the component to make it persist across renders
+const styleLoggedRef = { current: false };
+
 export function DoughCalculator() {
   // Define URL params at the very top
   const searchParams = useSearchParams();
@@ -650,7 +654,6 @@ export function DoughCalculator() {
   const [selectedStyle, setSelectedStyle] = useState<PizzaStyleValue>(
     isValidInitialStyle ? initialStyleFromUrl : 'neapolitan'
   );
-  console.log('Initial style set to:', isValidInitialStyle ? initialStyleFromUrl : 'neapolitan', 'from URL param:', initialStyleFromUrl);
   const [altitude, setAltitude] = useState('');
   const [ovenType, setOvenType] = useState<OvenType>('home');
 
@@ -697,26 +700,38 @@ export function DoughCalculator() {
   // Add a ref to track if initial URL param has been applied
   const initialUrlParamApplied = useRef(false);
 
-  // Add this to fix "Initial style set" console spam
-  // Use a ref to track if we've already logged the initial style
-  const initialStyleLogged = useRef(false);
-  
-  // Update the existing initialization logic
+  // Move the style logging to a dedicated effect that runs only once
   useEffect(() => {
-    // Initialize style from URL or default
-    const params = searchParams?.get('style');
-    const styleParam = params?.toLowerCase();
+    if (!styleLoggedRef.current) {
+      const params = searchParams?.get('style');
+      const styleParam = params?.toLowerCase();
+      const initialStyle = styleParam && PIZZA_STYLE_OPTIONS.some(opt => opt.value === styleParam)
+        ? styleParam as PizzaStyleValue
+        : 'neapolitan';
+      
+      // Only log once during development
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Initial style set to:', initialStyle, 'from URL param:', styleParam);
+      }
+      styleLoggedRef.current = true;
+    }
+  }, [searchParams]); // Include searchParams to ensure we get the latest value
+  
+  // Keep the original useEffect for handling style changes but remove redundant logging
+  useEffect(() => {
+    // Only run this effect if we haven't applied the initial URL param yet
+    if (!initialUrlParamApplied.current) {
+      // Initialize style from URL or default
+      const params = searchParams?.get('style');
+      const styleParam = params?.toLowerCase();
 
-    // Set initial style based on URL parameter or default to neapolitan
-    const initialStyle = styleParam && PIZZA_STYLE_OPTIONS.some(opt => opt.value === styleParam)
-      ? styleParam as PizzaStyleValue
-      : 'neapolitan';
-    
-    // Only log once and set the style
-    if (!initialStyleLogged.current) {
-      console.log('Initial style set to:', initialStyle, 'from URL param:', styleParam);
-      initialStyleLogged.current = true;
+      // Set initial style based on URL parameter or default to neapolitan
+      const initialStyle = styleParam && PIZZA_STYLE_OPTIONS.some(opt => opt.value === styleParam)
+        ? styleParam as PizzaStyleValue
+        : 'neapolitan';
+      
       setSelectedStyle(initialStyle);
+      initialUrlParamApplied.current = true;
     }
     
     // ... rest of existing useEffect code
@@ -749,7 +764,7 @@ export function DoughCalculator() {
 
   // Update fermentation time effect to completely destroy and recreate state
   useEffect(() => {
-    console.log("Fermentation type changed, resetting state");
+    // Removing the console.log that was causing spam
     setRecipeResult(null);
     setError(null);
     setIsCalculated(false);
@@ -854,7 +869,7 @@ export function DoughCalculator() {
     return schedule === 'cold';
   };
 
-  // Update the handleCalculate function to prevent multiple submissions and handle errors better
+  // Update the handleCalculate function to limit retries
   const handleCalculate = async (event: React.FormEvent<HTMLFormElement>, retryCount = 0) => {
     event.preventDefault();
     
@@ -864,8 +879,8 @@ export function DoughCalculator() {
       return;
     }
     
-    // Limit retries
-    if (retryCount > 3) {
+    // Limit retries to 1 to avoid excessive requests
+    if (retryCount > 1) {
       setError("We're experiencing high demand. Please try again later or with simpler parameters.");
       return;
     }
@@ -880,15 +895,35 @@ export function DoughCalculator() {
     setIsLoading(true);
     setLoadingStep(0);
 
-    // Set up loading animation
+    // Set up loading animation with custom retry message
     const loadingInterval = setInterval(() => {
-      setLoadingStep(step => (step + 1) % LOADING_STEPS.length);
+      if (retryCount > 0) {
+        // Show static retry message when retrying
+        setLoadingStep(0); // Use first step for retry message
+      } else {
+        // Normal loading animation when not retrying
+        setLoadingStep(step => (step + 1) % LOADING_STEPS.length);
+      }
     }, 2000);
+
+    // Customize loading steps based on retry status
+    if (retryCount > 0) {
+      LOADING_STEPS[0] = { 
+        icon: <Clock className="h-4 w-4" />, 
+        text: `Retry attempt ${retryCount}/1 - Processing recipe...` 
+      };
+    } else {
+      // Reset to original loading steps
+      LOADING_STEPS[0] = { 
+        icon: <Wheat className="h-4 w-4" />, 
+        text: "Analyzing flour requirements..." 
+      };
+    }
 
     // Use a single controller for all fetch operations
     const controller = new AbortController();
-    // Set a client-side timeout that's shorter than the server's timeout
-    const timeoutId = setTimeout(() => controller.abort(), 14000);
+    // Set a client-side timeout that's longer to match server changes
+    const timeoutId = setTimeout(() => controller.abort(), 58000);
 
     try {
       const numDoughBalls = parseInt(doughBalls);
@@ -999,11 +1034,10 @@ export function DoughCalculator() {
           throw new Error(`Server returned ${response.status}: ${response.statusText}`);
         }
         
-        // Handle service unavailable (503) with automatic retry
-        if (response.status === 503) {
-          // Get retry delay from header or use default
-          const retryAfter = response.headers.get('Retry-After');
-          const retryDelay = retryAfter ? parseInt(retryAfter, 10) * 1000 : 3000;
+        // Handle service unavailable (503) with a single retry and longer delay
+        if (response.status === 503 && retryCount === 0) {
+          // Wait 10 seconds before retrying to give server time to recover
+          const retryDelay = 10000;
           
           console.log(`Server overloaded, retrying in ${retryDelay/1000}s...`);
           clearInterval(loadingInterval);
@@ -1018,7 +1052,7 @@ export function DoughCalculator() {
         }
         
         // Handle specific timeout errors from the server
-        if (response.status === 504 || errorData.isTimeout) {
+        if (response.status === 504 || (errorData && errorData.isTimeout)) {
           throw new Error('Request timed out. The calculation is taking longer than expected.');
         }
         
@@ -1070,24 +1104,25 @@ export function DoughCalculator() {
       
       // Check if it's an AbortError (client-side timeout) or a server timeout message
       if (
-        error instanceof DOMException && error.name === 'AbortError' || 
+        (error instanceof DOMException && error.name === 'AbortError') || 
         (error instanceof Error && error.message.includes('timeout'))
       ) {
         // For timeout errors, try one automatic retry
         if (retryCount === 0) {
-          console.log('Request timed out, retrying once...');
+          console.log('Request timed out, retrying once after 10s...');
           clearInterval(loadingInterval);
           
-          // Wait 2 seconds before retrying
+          // Wait 10 seconds before retrying (longer delay to recover)
           setTimeout(() => {
             setIsLoading(false);
             handleCalculate(event, retryCount + 1);
-          }, 2000);
+          }, 10000);
           
           return;
         }
         
-        setError('Request timed out. Please try again with simpler recipe parameters.');
+        // After retry, show timeout error
+        setError('Recipe calculation timed out. Please try again with simpler recipe parameters.');
         
         // Track timeout error
         trackEvent('calculation_error', {

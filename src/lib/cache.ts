@@ -30,8 +30,14 @@ class Cache {
     return Cache.instance
   }
 
+  /**
+   * Set a value in the cache
+   * @param key The cache key
+   * @param value The value to cache
+   * @param customTTL Optional TTL in seconds (will be converted to milliseconds)
+   */
   public set(key: string, value: any, customTTL?: number): void {
-    const ttl = customTTL || this.DEFAULT_TTL
+    const ttl = customTTL ? customTTL * 1000 : this.DEFAULT_TTL;
     const entry: CacheEntry = {
       value,
       timestamp: Date.now(),

@@ -7,7 +7,7 @@ import { redisCache } from '@/lib/redisCache'
 
 // Enable edge runtime and set timeout
 export const runtime = 'edge';
-export const maxDuration = 15; // Reduced from 25 to 15 seconds to ensure we stay well within limits
+export const maxDuration = 60; // Increased to 60 seconds (Vercel maximum for Edge functions)
 
 // Add oven type constants
 const OVEN_TYPES = {
@@ -46,13 +46,13 @@ async function withRetry<T>(
 }
 
 // Define a simple model that's definitely available on OpenRouter
-const MODEL = 'google/gemma-2-it-9b:free' // Changed to smaller model that responds faster
+const MODEL = 'google/gemma-3-12b-it:free' // Reverted back to the original model
 
 // Initialize OpenRouter client with error logging
 const openai = new OpenAI({
   baseURL: 'https://openrouter.ai/api/v1',
   apiKey: process.env.OPENROUTER_API_KEY || '',
-  timeout: 12000, // Reduced to 12 seconds to ensure completion within limits
+  timeout: 55000, // Increased to 55 seconds (still within 60s limit)
   defaultHeaders: {
     'HTTP-Referer': process.env.NEXTAUTH_URL || 'https://doughmasterai.com',
     'X-Title': 'Pizza Dough Calculator'
@@ -859,9 +859,9 @@ const makeCompletion = async (prompt: string) => {
 // Export API route handler
 export async function POST(request: Request) {
   try {
-    // Add timeout for the entire request - reduced to match Vercel's limits
+    // Add timeout for the entire request - increased but still below Vercel limit
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Request timeout - processing took too long')), 12000); // Reduced timeout
+      setTimeout(() => reject(new Error('Request timeout - processing took too long')), 55000);
     });
     
     const processingPromise = (async () => {
@@ -871,8 +871,8 @@ export async function POST(request: Request) {
       // but still captures the essential parameters for the recipe
       const essentialData = {
         style: data.style,
-        doughBalls: data.doughBalls,
-        weightPerBall: data.weightPerBall,
+        doughBalls: Math.round(data.doughBalls / 2) * 2, // Round to even number to increase cache hits
+        weightPerBall: Math.round(data.weightPerBall / 10) * 10, // Round to nearest 10g
         recipe: {
           hydration: Math.round(data.recipe.hydration),
           salt: Math.round(data.recipe.salt * 10) / 10,
@@ -900,6 +900,7 @@ export async function POST(request: Request) {
         cachedResult = await redisCache.get<string>(cacheKey);
       } catch (redisError) {
         console.error('Redis cache error:', redisError);
+        // Continue without Redis if it fails
       }
       
       // If not in Redis, try in-memory cache
@@ -908,6 +909,7 @@ export async function POST(request: Request) {
           cachedResult = cache.get(cacheKey);
         } catch (memCacheError) {
           console.error('Memory cache error:', memCacheError);
+          // Continue without cache if it fails
         }
       }
       
@@ -924,16 +926,22 @@ export async function POST(request: Request) {
       // Prepare the prompt with the recipe data
       const prompt = PROMPT_TEMPLATE(data);
 
-      // Make API call with one single retry to avoid extending time too much
-      let completion;
-      try {
-        completion = await makeCompletion(prompt);
-      } catch (firstError) {
-        console.error('First API call error, retrying once:', firstError);
-        // Wait a moment before retrying
-        await new Promise(resolve => setTimeout(resolve, 500));
-        completion = await makeCompletion(prompt);
-      }
+      // Make API call with retry logic
+      const completion = await withRetry(async () => {
+        try {
+          const response = await makeCompletion(prompt);
+          
+          if (!response.choices?.[0]?.message?.content) {
+            console.error('API response missing content');
+            throw new Error('No content in API response');
+          }
+        
+          return response;
+        } catch (error) {
+          console.error('API call error:', error instanceof Error ? error.message : String(error));
+          throw error;
+        }
+      }, 1, 1000); // Only 1 retry with 1 second delay
       
       const content = completion.choices[0].message.content;
       if (!content) {
@@ -950,6 +958,20 @@ export async function POST(request: Request) {
         throw new Error(`Failed to clean API response: ${cleanError.message}`);
       }
 
+      let result;
+      try {
+        result = JSON.parse(cleanedResponse);
+      } catch (error) {
+        const parseError = error as Error;
+        console.error('Error parsing cleaned response:', parseError.message);
+        throw new Error(`Failed to parse cleaned response: ${parseError.message}`);
+      }
+
+      if (!result.flourRecommendation || !result.processTimeline || !result.temperatureAnalysis) {
+        console.error('Missing required fields in response');
+        throw new Error('Response missing required fields');
+      }
+
       // Cache the result in both Redis (persistent) and memory (fast)
       try {
         await redisCache.set(cacheKey, cleanedResponse, 60 * 60 * 24 * 30); // 30 days in seconds
@@ -958,7 +980,7 @@ export async function POST(request: Request) {
       }
       
       try {
-        cache.set(cacheKey, cleanedResponse);
+        cache.set(cacheKey, cleanedResponse, 60 * 60 * 24 * 30); // Set in-memory cache with same TTL
       } catch (memCacheError) {
         console.error('Memory cache set error:', memCacheError);
       }
@@ -980,15 +1002,16 @@ export async function POST(request: Request) {
     
     // For all errors, return a user-friendly response that also allows for retry
     return new Response(JSON.stringify({
-      error: 'The recipe calculation service is currently overloaded. Please try again in a moment.',
+      error: 'The recipe calculation service is currently busy. Please try again in a moment.',
       isTimeout: errorMessage.includes('timeout') || errorMessage.includes('processing took too long'),
+      retryAfter: 10, // Suggest client retry after 10 seconds
       message: errorMessage
     }), {
       status: 503, // Service Unavailable status code
       headers: { 
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store',
-        'Retry-After': '5' // Suggest client retry after 5 seconds
+        'Retry-After': '10' // Suggest client retry after 10 seconds
       },
     });
   }
