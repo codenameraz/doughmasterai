@@ -1,48 +1,37 @@
-type CacheEntry = {
-  value: any
-  timestamp: number
+import { Redis } from '@upstash/redis'
+
+if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+  throw new Error('Redis environment variables not set')
 }
 
-class Cache {
-  private static instance: Cache
-  private cache: Map<string, CacheEntry>
-  private readonly TTL: number // Time to live in milliseconds
+export const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+})
 
-  private constructor() {
-    this.cache = new Map()
-    this.TTL = 1000 * 60 * 60 * 24 // 24 hours
-  }
-
-  public static getInstance(): Cache {
-    if (!Cache.instance) {
-      Cache.instance = new Cache()
-    }
-    return Cache.instance
-  }
-
-  public set(key: string, value: any): void {
-    this.cache.set(key, {
-      value,
-      timestamp: Date.now()
-    })
-  }
-
-  public get(key: string): any | null {
-    const entry = this.cache.get(key)
-    if (!entry) return null
-
-    // Check if entry has expired
-    if (Date.now() - entry.timestamp > this.TTL) {
-      this.cache.delete(key)
+export const cache = {
+  async get(key: string): Promise<string | null> {
+    try {
+      return await redis.get(key)
+    } catch (error) {
+      console.error('Cache get error:', error)
       return null
     }
+  },
 
-    return entry.value
+  async set(key: string, value: string, expirySeconds: number): Promise<void> {
+    try {
+      await redis.set(key, value, { ex: expirySeconds })
+    } catch (error) {
+      console.error('Cache set error:', error)
+    }
+  },
+
+  async del(key: string): Promise<void> {
+    try {
+      await redis.del(key)
+    } catch (error) {
+      console.error('Cache delete error:', error)
+    }
   }
-
-  public clear(): void {
-    this.cache.clear()
-  }
-}
-
-export const cache = Cache.getInstance() 
+} 

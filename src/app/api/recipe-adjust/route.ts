@@ -561,7 +561,7 @@ function cleanResponse(content: string, data: RecipeInput): string {
       .replace(/22\.2°[CF]/g, `${roomTemp}°${tempUnit}`);
 
     // 2. Fix general JSON structure issues
-    jsonStr = jsonStr
+      jsonStr = jsonStr
       // Remove extra commas before values
       .replace(/:\s*,\s*"([^"]+)"/g, ': "$1"')
       .replace(/:\s*,\s*(\d+)/g, ': $1')
@@ -570,7 +570,7 @@ function cleanResponse(content: string, data: RecipeInput): string {
       // Fix multiple commas
       .replace(/,{2,}/g, ',')
       // Remove trailing commas before closing brackets
-      .replace(/,(\s*[}\]])/g, '$1')
+        .replace(/,(\s*[}\]])/g, '$1')
       // Fix missing commas between array elements
       .replace(/](\s*)\[/g, '], [')
       .replace(/}(\s*)\{/g, '}, {')
@@ -855,26 +855,31 @@ const makeCompletion = async (prompt: string) => {
   });
 };
 
+// Add cache key generator function
+function generateCacheKey(data: RecipeInput): string {
+  return `recipe:${data.style}:${data.doughBalls}:${data.weightPerBall}:${data.recipe.hydration}:${data.recipe.salt}:${data.recipe.oil}:${data.recipe.fermentationTime}:${data.environment.roomTemp}:${data.environment.ovenType}`;
+}
+
 // Export API route handler
 export async function POST(request: Request) {
   try {
     const data: RecipeInput = await request.json();
     console.log('API request payload:', JSON.stringify(data, null, 2));
     
+    // Generate cache key
+    const cacheKey = generateCacheKey(data);
+    
+    // Try to get from cache first
+    const cachedResponse = await cache.get(cacheKey);
+    if (cachedResponse) {
+      console.log('Cache hit for:', cacheKey);
+      return NextResponse.json(JSON.parse(cachedResponse));
+    }
+
     // Rate limiting check
     if (!await rateLimiter.checkRateLimit()) {
       return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }), {
         status: 429,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    // Check cache first
-    const cacheKey = JSON.stringify(data);
-    const cachedResult = await cache.get(cacheKey);
-    if (cachedResult) {
-      console.log('Cache hit - returning cached result');
-      return new Response(cachedResult, {
         headers: { 'Content-Type': 'application/json' },
       });
     }
