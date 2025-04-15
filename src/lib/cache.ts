@@ -36,24 +36,19 @@ class Cache {
    * @param value The value to cache
    * @param customTTL Optional TTL in seconds (will be converted to milliseconds)
    */
-  public set(key: string, value: any, customTTL?: number): void {
+  public async set(key: string, value: any, customTTL?: number): Promise<void> {
     const ttl = customTTL ? customTTL * 1000 : this.DEFAULT_TTL;
     
-    // Ensure the value is properly serialized to avoid storing objects directly
-    // which could lead to "[object Object]" errors when retrieved
     let safeValue;
     
     if (typeof value === 'string') {
-      // If it's already a string, try to parse it to ensure it's valid JSON
       try {
-        const parsed = JSON.parse(value);
-        safeValue = value; // It's valid JSON string, keep as is
+        JSON.parse(value);
+        safeValue = value;
       } catch (e) {
-        // It's a string but not valid JSON, stringify it
         safeValue = JSON.stringify(value);
       }
     } else {
-      // It's not a string, stringify the object
       safeValue = JSON.stringify(value);
     }
     
@@ -63,24 +58,30 @@ class Cache {
       ttl
     }
     
-    this.cache.set(key, entry)
-    this.saveToStorage()
+    // Set in memory cache immediately
+    this.cache.set(key, entry);
+    
+    // Save to storage in the background
+    Promise.resolve().then(() => {
+      this.saveToStorage();
+    });
   }
 
-  public get(key: string): any | null {
-    const entry = this.cache.get(key)
-    if (!entry) return null
+  public async get(key: string): Promise<any | null> {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
 
-    const ttl = entry.ttl || this.DEFAULT_TTL
+    const ttl = entry.ttl || this.DEFAULT_TTL;
     
-    // Check if entry has expired
     if (Date.now() - entry.timestamp > ttl) {
-      this.cache.delete(key)
-      this.saveToStorage()
-      return null
+      this.cache.delete(key);
+      // Save to storage in the background
+      Promise.resolve().then(() => {
+        this.saveToStorage();
+      });
+      return null;
     }
 
-    // Parse the stored value to ensure we return a proper object, not a string
     if (typeof entry.value === 'string') {
       try {
         return JSON.parse(entry.value);
@@ -90,7 +91,7 @@ class Cache {
       }
     }
     
-    return entry.value
+    return entry.value;
   }
 
   public getWithTimestamp(key: string): { value: any, age: number } | null {

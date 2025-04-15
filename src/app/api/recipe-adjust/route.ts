@@ -3,11 +3,10 @@ import { NextResponse } from 'next/server'
 import { PIZZA_STYLES } from '@/lib/openai/config'
 import { cache } from '@/lib/cache'
 import { rateLimiter } from '@/lib/rateLimiter'
-import { redisCache } from '@/lib/redisCache'
 
 // Enable edge runtime and set timeout
 export const runtime = 'edge';
-export const maxDuration = 60; // Increased to 60 seconds (Vercel maximum for Edge functions)
+export const maxDuration = 60;
 
 // Add oven type constants
 const OVEN_TYPES = {
@@ -856,171 +855,82 @@ const makeCompletion = async (prompt: string) => {
   });
 };
 
+// Add timeout helper
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    setTimeout(() => reject(new Error(`Operation timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]);
+};
+
 // Export API route handler
 export async function POST(request: Request) {
   try {
-    // Add timeout for the entire request - increased but still below Vercel limit
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Request timeout - processing took too long')), 55000);
-    });
+    // Rate limit check with quick timeout
+    const rateLimitPromise = rateLimiter.checkRateLimit();
+    try {
+      await withTimeout(rateLimitPromise, 2000);
+    } catch (error) {
+      console.warn('Rate limit check timed out, proceeding with request');
+    }
+
+    const data = await request.json() as RecipeInput;
     
-    const processingPromise = (async () => {
-      const data: RecipeInput = await request.json();
-      
-      // Generate a deterministic cache key that's more resilient to small variations
-      // but still captures the essential parameters for the recipe
-      const essentialData = {
-        style: data.style,
-        doughBalls: Math.round(data.doughBalls / 2) * 2, // Round to even number to increase cache hits
-        weightPerBall: Math.round(data.weightPerBall / 10) * 10, // Round to nearest 10g
-        recipe: {
-          hydration: Math.round(data.recipe.hydration),
-          salt: Math.round(data.recipe.salt * 10) / 10,
-          oil: data.recipe.oil === null ? null : Math.round(data.recipe.oil),
-          flourMix: data.recipe.flourMix,
-          fermentationTime: data.recipe.fermentationTime,
-          yeast: {
-            type: data.recipe.yeast.type
-          }
-        },
-        fermentation: {
-          schedule: data.fermentation.schedule
-        },
-        environment: {
-          ovenType: data.environment?.ovenType,
-          tempUnit: data.environment?.tempUnit
+    // Generate cache key from essential parameters
+    const cacheKey = JSON.stringify({
+      style: data.style,
+      doughBalls: Math.round(data.doughBalls / 2) * 2, // Round to even number
+      weightPerBall: Math.round(data.weightPerBall / 10) * 10, // Round to nearest 10g
+      recipe: {
+        hydration: Math.round(data.recipe.hydration),
+        salt: Math.round(data.recipe.salt * 10) / 10,
+        oil: data.recipe.oil === null ? null : Math.round(data.recipe.oil),
+        flourMix: data.recipe.flourMix,
+        fermentationTime: data.recipe.fermentationTime,
+        yeast: {
+          type: data.recipe.yeast.type
         }
-      };
-      
-      const cacheKey = JSON.stringify(essentialData);
-      
-      // Try Redis cache first if available
-      let cachedResult = null;
-      try {
-        cachedResult = await redisCache.get<string>(cacheKey);
-      } catch (redisError) {
-        console.error('Redis cache error:', redisError);
-        // Continue without Redis if it fails
-      }
-      
-      // If not in Redis, try in-memory cache
-      if (!cachedResult) {
-        try {
-          cachedResult = cache.get(cacheKey);
-        } catch (memCacheError) {
-          console.error('Memory cache error:', memCacheError);
-          // Continue without cache if it fails
-        }
-      }
-      
-      if (cachedResult) {
-        console.log('Cache hit - returning cached result');
-        // Ensure cached result is properly stringified
-        const serializedResult = typeof cachedResult === 'string' 
-          ? cachedResult 
-          : JSON.stringify(cachedResult);
-        
-        return new Response(serializedResult, {
-          headers: { 
-            'Content-Type': 'application/json',
-            'Cache-Control': 'public, max-age=3600',
-          },
-        });
-      }
-
-      // Prepare the prompt with the recipe data
-      const prompt = PROMPT_TEMPLATE(data);
-
-      // Make API call with retry logic
-      const completion = await withRetry(async () => {
-        try {
-          const response = await makeCompletion(prompt);
-          
-          if (!response.choices?.[0]?.message?.content) {
-            console.error('API response missing content');
-            throw new Error('No content in API response');
-          }
-        
-          return response;
-        } catch (error) {
-          console.error('API call error:', error instanceof Error ? error.message : String(error));
-          throw error;
-        }
-      }, 1, 1000);
-      
-      const content = completion.choices[0].message.content;
-      if (!content) {
-        throw new Error('No content in API response');
-      }
-
-      // Clean and validate the response
-      let cleanedResponse;
-      try {
-        cleanedResponse = cleanResponse(content, data);
-        console.log('Cleaned response:', cleanedResponse);
-      } catch (error) {
-        const cleanError = error as Error;
-        console.error('Error cleaning response:', cleanError.message);
-        throw new Error(`Failed to clean API response: ${cleanError.message}`);
-      }
-
-      // Ensure cleanedResponse is a string
-      const responseStr = typeof cleanedResponse === 'string' 
-        ? cleanedResponse 
-        : JSON.stringify(cleanedResponse);
-
-      // Validate JSON structure
-      try {
-        JSON.parse(responseStr);
-      } catch (error) {
-        console.error('Invalid JSON structure:', error);
-        throw new Error('Invalid JSON structure in response');
-      }
-
-      // Cache the validated response string
-      try {
-        await redisCache.set(cacheKey, responseStr, 60 * 60 * 24 * 30);
-      } catch (redisCacheError) {
-        console.error('Redis cache set error:', redisCacheError);
-      }
-      
-      try {
-        cache.set(cacheKey, responseStr, 60 * 60 * 24 * 30);
-      } catch (memCacheError) {
-        console.error('Memory cache set error:', memCacheError);
-      }
-
-      return new Response(responseStr, {
-        headers: { 
-          'Content-Type': 'application/json',
-          'Cache-Control': 'public, max-age=3600',
-        },
-      });
-    })();
-    
-    // Race between the processing and timeout
-    return await Promise.race([processingPromise, timeoutPromise]) as Response;
-    
-  } catch (error) {
-    console.error('Error processing recipe:', error instanceof Error ? error.message : String(error));
-    let errorMessage = error instanceof Error ? error.message : 'Failed to process recipe';
-    
-    // Create the error response object
-    const errorResponse = {
-      error: 'The recipe calculation service is currently busy. Please try again in a moment.',
-      isTimeout: errorMessage.includes('timeout') || errorMessage.includes('processing took too long'),
-      retryAfter: 10, // Suggest client retry after 10 seconds
-      message: errorMessage
-    };
-    
-    // Ensure we're returning valid JSON
-    return new Response(JSON.stringify(errorResponse), {
-      status: 503, // Service Unavailable status code
-      headers: { 
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-store',
-        'Retry-After': '10' // Suggest client retry after 10 seconds
       },
+      fermentation: {
+        schedule: data.fermentation.schedule,
+        temperature: data.fermentation.temperature
+      },
+      environment: {
+        altitude: data.environment.altitude,
+        ovenType: data.environment.ovenType,
+        roomTemp: data.environment.roomTemp,
+        tempUnit: data.environment.tempUnit
+      }
     });
+
+    // Try to get from cache
+    const cachedResult = await cache.get(cacheKey);
+    if (cachedResult) {
+      console.log('Cache hit - returning cached result');
+      return NextResponse.json(cachedResult);
+    }
+
+    // Make the API call
+    const prompt = PROMPT_TEMPLATE(data);
+    const completion = await makeCompletion(prompt);
+    
+    const content = completion.choices[0].message.content;
+    if (!content) {
+      throw new Error('No content in API response');
+    }
+    
+    // Clean and validate the response
+    const cleanedResponse = cleanResponse(content, data);
+    
+    // Store in cache (24 hour TTL)
+    await cache.set(cacheKey, cleanedResponse, 60 * 60 * 24);
+
+    return NextResponse.json(JSON.parse(cleanedResponse));
+  } catch (error: any) {
+    console.error('API Error:', error);
+    return NextResponse.json(
+      { error: error?.message || 'An unexpected error occurred' },
+      { status: error?.status || 500 }
+    );
   }
 } 
