@@ -44,14 +44,45 @@ async function withRetry<T>(
   throw lastError;
 }
 
-// Define a simple model that's definitely available on OpenRouter
-const MODEL = 'anthropic/claude-3-haiku-20240307:free' // Switch to a faster model
+// Better retry logic with exponential backoff and timeout
+async function withRetryAndTimeout<T>(
+  fn: () => Promise<T>,
+  timeoutMs: number = 15000,
+  maxRetries: number = 1
+): Promise<T> {
+  // Create a promise that rejects after timeoutMs
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    setTimeout(() => reject(new Error(`Operation timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+  
+  let lastError: any;
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      // Race between the function and the timeout
+      return await Promise.race([fn(), timeoutPromise]);
+    } catch (error) {
+      console.warn(`API call attempt ${i+1}/${maxRetries+1} failed:`, error);
+      lastError = error;
+      
+      if (i < maxRetries) {
+        // Wait with exponential backoff before retrying (but keep total time reasonable)
+        const backoffTime = Math.min(300 * Math.pow(2, i), 1000);
+        await new Promise(resolve => setTimeout(resolve, backoffTime));
+      }
+    }
+  }
+  
+  throw lastError;
+}
 
-// Initialize OpenRouter client with improved settings
+// Define a simple model that's definitely available on OpenRouter
+const MODEL = 'google/gemma-3-12b-it:free' // Using the original model as requested
+
+// Initialize OpenRouter client with optimized settings
 const openai = new OpenAI({
   baseURL: 'https://openrouter.ai/api/v1',
   apiKey: process.env.OPENROUTER_API_KEY || '',
-  timeout: 20000, // Reduce timeout to prevent gateway timeouts
+  timeout: 20000, // Lower timeout to ensure we get a response before gateway timeout
   defaultHeaders: {
     'HTTP-Referer': process.env.NEXTAUTH_URL || 'https://doughmasterai.com',
     'X-Title': 'Pizza Dough Calculator'
@@ -837,37 +868,30 @@ function validateResponse(response: any, fermentation: FermentationType): boolea
   return true;
 }
 
-// Simplified makeCompletion with retry and timeout
+// Optimized makeCompletion with retry and timeout
 const makeCompletion = async (prompt: string) => {
-  const completionPromise = openai.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: 'system', content: SYSTEM_MESSAGE },
-      { role: 'user', content: prompt }
-    ],
-    temperature: 0.2,
-    max_tokens: 1500, // Reduced for faster response
-  });
-  
-  return await withTimeout(completionPromise, 18000); // 18 second timeout
-};
-
-// Add timeout helper
-const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
-  const timeoutPromise = new Promise<T>((_, reject) => {
-    setTimeout(() => reject(new Error(`Operation timed out after ${timeoutMs}ms`)), timeoutMs);
-  });
-  return Promise.race([promise, timeoutPromise]);
+  return await withRetryAndTimeout(
+    () => openai.chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: 'system', content: SYSTEM_MESSAGE },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.2,
+      max_tokens: 1500, // Reduced for faster response
+    }),
+    15000, // 15 second timeout
+    1      // 1 retry (2 attempts total)
+  );
 };
 
 // Export API route handler
 export async function POST(request: Request) {
   try {
-    // Skip rate limiting for now to reduce latency
     const data = await request.json() as RecipeInput;
     
-    // Simplified cache key
-    const cacheKey = `recipe-${data.style}-${data.doughBalls}-${data.weightPerBall}-${data.recipe.hydration}`;
+    // Simplified cache key that still captures essential parameters
+    const cacheKey = `recipe-${data.style}-${Math.round(data.doughBalls)}-${Math.round(data.weightPerBall/10)*10}-${Math.round(data.recipe.hydration)}`;
 
     // Try to get from cache
     const cachedResult = await cache.get(cacheKey);
@@ -875,70 +899,27 @@ export async function POST(request: Request) {
       console.log('Cache hit - returning cached result');
       return NextResponse.json(cachedResult);
     }
+    
+    console.log('Cache miss - requesting from API');
 
-    // Simple JSON placeholder response for testing
-    const testResponse = {
-      ingredients: {
-        flour: {
-          total: Math.round(data.doughBalls * data.weightPerBall * 0.58),
-          flours: [
-            { type: "Bread Flour", amount: Math.round(data.doughBalls * data.weightPerBall * 0.58) }
-          ]
-        },
-        water: {
-          amount: Math.round(data.doughBalls * data.weightPerBall * 0.58 * (data.recipe.hydration / 100))
-        },
-        salt: {
-          amount: Math.round(data.doughBalls * data.weightPerBall * 0.58 * (data.recipe.salt / 100))
-        },
-        yeast: {
-          type: data.recipe.yeast.type,
-          amount: Math.round(data.doughBalls * data.weightPerBall * 0.58 * 0.002)
-        }
-      },
-      processTimeline: {
-        steps: [
-          {
-            step: "Initial Mix",
-            time: "00:00",
-            description: "Mix all ingredients except salt for 1 minute",
-            temperature: `${data.environment.roomTemp}°${data.environment.tempUnit}`
-          },
-          {
-            step: "Autolyse",
-            time: "00:20",
-            description: "Add salt and mix until incorporated",
-            temperature: `${data.environment.roomTemp}°${data.environment.tempUnit}`
-          },
-          {
-            step: "Fermentation",
-            time: "4:00",
-            description: "Ferment at room temperature",
-            temperature: `${data.environment.roomTemp}°${data.environment.tempUnit}`
-          }
-        ]
-      }
-    };
-
-    // Cache the test response
-    await cache.set(cacheKey, testResponse, 60 * 60); // 1 hour TTL
-
-    return NextResponse.json(testResponse);
-
-    // TEMPORARILY COMMENTING OUT ACTUAL API CALL TO DEBUG TIMEOUTS
-    /*
-    // Make the API call
+    // Make the API call with simplified prompt
     const prompt = PROMPT_TEMPLATE(data);
+    console.time('api-call');
     const completion = await makeCompletion(prompt);
+    console.timeEnd('api-call');
+    
+    console.log('API response received');
     
     const content = completion.choices[0].message.content;
     if (!content) {
       throw new Error('No content in API response');
     }
     
-    // Simplified response processing - just extract JSON
-    let jsonResponse;
+    // Extract JSON with minimal processing
     try {
+      console.time('json-processing');
+      
+      // First, find the JSON object
       const jsonStart = content.indexOf('{');
       const jsonEnd = content.lastIndexOf('}');
       
@@ -946,23 +927,48 @@ export async function POST(request: Request) {
         throw new Error('No JSON found in response');
       }
       
+      // Extract and perform minimal fixes
       const jsonStr = content.slice(jsonStart, jsonEnd + 1);
-      jsonResponse = JSON.parse(jsonStr);
+      const fixedJsonStr = jsonStr
+        .replace(/,\s*}/g, '}')
+        .replace(/,\s*]/g, ']')
+        .trim();
       
-      // Cache the response
+      // Parse the JSON
+      const jsonResponse = JSON.parse(fixedJsonStr);
+      console.timeEnd('json-processing');
+      
+      // Fix temperature values
+      if (jsonResponse.processTimeline?.steps) {
+        const roomTemp = data.environment.roomTemp;
+        const tempUnit = data.environment.tempUnit;
+        
+        jsonResponse.processTimeline.steps = jsonResponse.processTimeline.steps.map((step: any) => ({
+          ...step,
+          temperature: step.isRefrigeration ? 
+            `${tempUnit === 'F' ? 39 : 4}°${tempUnit}` : 
+            `${roomTemp}°${tempUnit}`
+        }));
+      }
+      
+      // Cache the successful response
       await cache.set(cacheKey, jsonResponse, 60 * 60 * 24);
+      console.log('Response cached successfully');
       
       return NextResponse.json(jsonResponse);
     } catch (error) {
       console.error('JSON parsing error:', error);
-      throw new Error('Failed to parse response from AI');
+      throw new Error(`Failed to parse response from AI: ${error instanceof Error ? error.message : String(error)}`);
     }
-    */
   } catch (error: any) {
     console.error('API Error:', error);
+    
     return NextResponse.json(
-      { error: error?.message || 'An unexpected error occurred' },
-      { status: 500 }
+      { 
+        error: error?.message || 'An unexpected error occurred',
+        type: error?.constructor?.name
+      },
+      { status: error?.status || 500 }
     );
   }
 } 
