@@ -915,10 +915,15 @@ export async function POST(request: Request) {
       
       if (cachedResult) {
         console.log('Cache hit - returning cached result');
-        return new Response(cachedResult, {
+        // Ensure cached result is properly stringified
+        const serializedResult = typeof cachedResult === 'string' 
+          ? cachedResult 
+          : JSON.stringify(cachedResult);
+        
+        return new Response(serializedResult, {
           headers: { 
             'Content-Type': 'application/json',
-            'Cache-Control': 'public, max-age=3600', // Cache for 1 hour
+            'Cache-Control': 'public, max-age=3600',
           },
         });
       }
@@ -941,7 +946,7 @@ export async function POST(request: Request) {
           console.error('API call error:', error instanceof Error ? error.message : String(error));
           throw error;
         }
-      }, 1, 1000); // Only 1 retry with 1 second delay
+      }, 1, 1000);
       
       const content = completion.choices[0].message.content;
       if (!content) {
@@ -952,56 +957,43 @@ export async function POST(request: Request) {
       let cleanedResponse;
       try {
         cleanedResponse = cleanResponse(content, data);
+        console.log('Cleaned response:', cleanedResponse);
       } catch (error) {
         const cleanError = error as Error;
         console.error('Error cleaning response:', cleanError.message);
         throw new Error(`Failed to clean API response: ${cleanError.message}`);
       }
 
-      let result;
+      // Ensure cleanedResponse is a string
+      const responseStr = typeof cleanedResponse === 'string' 
+        ? cleanedResponse 
+        : JSON.stringify(cleanedResponse);
+
+      // Validate JSON structure
       try {
-        result = JSON.parse(cleanedResponse);
+        JSON.parse(responseStr);
       } catch (error) {
-        const parseError = error as Error;
-        console.error('Error parsing cleaned response:', parseError.message);
-        throw new Error(`Failed to parse cleaned response: ${parseError.message}`);
+        console.error('Invalid JSON structure:', error);
+        throw new Error('Invalid JSON structure in response');
       }
 
-      if (!result.flourRecommendation || !result.processTimeline || !result.temperatureAnalysis) {
-        console.error('Missing required fields in response');
-        throw new Error('Response missing required fields');
-      }
-
-      // Cache the result in both Redis (persistent) and memory (fast)
+      // Cache the validated response string
       try {
-        await redisCache.set(cacheKey, cleanedResponse, 60 * 60 * 24 * 30); // 30 days in seconds
+        await redisCache.set(cacheKey, responseStr, 60 * 60 * 24 * 30);
       } catch (redisCacheError) {
         console.error('Redis cache set error:', redisCacheError);
       }
       
       try {
-        cache.set(cacheKey, cleanedResponse, 60 * 60 * 24 * 30); // Set in-memory cache with same TTL
+        cache.set(cacheKey, responseStr, 60 * 60 * 24 * 30);
       } catch (memCacheError) {
         console.error('Memory cache set error:', memCacheError);
       }
 
-      // Final validation to ensure we're returning a valid JSON string
-      let validResponse;
-      try {
-        // Parse and stringify to ensure it's a valid JSON string
-        const parsed = typeof cleanedResponse === 'string' 
-          ? JSON.parse(cleanedResponse) 
-          : cleanedResponse;
-        validResponse = JSON.stringify(parsed);
-      } catch (error) {
-        console.error('Error in final JSON validation:', error);
-        throw new Error('Invalid JSON structure in response');
-      }
-
-      return new Response(validResponse, {
+      return new Response(responseStr, {
         headers: { 
           'Content-Type': 'application/json',
-          'Cache-Control': 'public, max-age=3600', // Cache for 1 hour
+          'Cache-Control': 'public, max-age=3600',
         },
       });
     })();

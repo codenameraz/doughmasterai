@@ -71,20 +71,16 @@ class RedisCache {
       if (!result) return null;
       
       // Always ensure we return a properly parsed JSON object
-      // Handle the result manually to avoid JSON parsing errors
-      if (typeof result === 'string') {
-        try {
+      try {
+        // If it's already a string, try to parse it
+        if (typeof result === 'string') {
           return JSON.parse(result) as T;
-        } catch (e) {
-          console.error('Failed to parse Redis cache result', e);
-          // If we can't parse it, it's probably not a valid JSON
-          // Return null rather than an invalid string that would break the client
-          return null;
         }
-      } else {
-        // If it's not a string but an object, stringify then parse to ensure it's proper JSON
-        const safeResult = JSON.stringify(result);
-        return JSON.parse(safeResult) as T;
+        // If it's not a string, stringify then parse to ensure proper JSON
+        return JSON.parse(JSON.stringify(result)) as T;
+      } catch (e) {
+        console.error('Failed to parse Redis cache result:', e);
+        return null;
       }
     } catch (error) {
       console.error('Redis cache get error:', error);
@@ -107,8 +103,18 @@ class RedisCache {
       const cacheKey = this.PREFIX + key;
       const expiration = ttl || this.DEFAULT_TTL;
       
-      // Ensure value is a string to avoid serialization issues
-      const valueToStore = typeof value === 'string' ? value : JSON.stringify(value);
+      // Ensure value is a properly formatted JSON string
+      const valueToStore = typeof value === 'string' 
+        ? value 
+        : JSON.stringify(value);
+      
+      // Validate JSON structure before storing
+      try {
+        JSON.parse(valueToStore);
+      } catch (e) {
+        console.error('Invalid JSON structure for cache:', e);
+        return;
+      }
       
       await this.redis!.set(cacheKey, valueToStore, { ex: expiration });
     } catch (error) {
