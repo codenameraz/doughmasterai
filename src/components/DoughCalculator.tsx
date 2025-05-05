@@ -180,9 +180,9 @@ interface DetailedAnalysis {
         rationale: string;
         flours: Array<{
             type: string;
-            proteinContent: number;
+            percentage: number;
+            proteinContent: string;
             purpose: string;
-            percentage?: number;
         }>;
         alternatives?: string[];
     };
@@ -192,6 +192,11 @@ interface DetailedAnalysis {
         impact: string[];
     };
     saltAnalysis?: {
+        percentage: number;
+        rationale: string;
+        impact: string[];
+    };
+    oilAnalysis?: {
         percentage: number;
         rationale: string;
         impact: string[];
@@ -1760,7 +1765,7 @@ export function DoughCalculator() {
                 <CardTitle className="text-lg font-semibold">Process Timeline</CardTitle>
                 <CardDescription>Step by step guide for your dough preparation</CardDescription>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="overflow-hidden">
                 {recipeResult?.processTimeline?.steps?.map((step, index) => {
                   const timelineConnector = index !== recipeResult.processTimeline.steps.length - 1 ? (
                     <div className="absolute left-[11px] top-2 h-full w-[2px] bg-muted-foreground/20" />
@@ -1772,28 +1777,28 @@ export function DoughCalculator() {
                       <div className="absolute left-0 top-0 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-bold">
                         {step.step}
                       </div>
-                      <div className="space-y-2">
+                      <div className="space-y-2 max-w-full">
                         <div className="flex flex-col sm:flex-row sm:items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
                           {step.duration && (
-                            <div className="flex items-center gap-1.5">
-                              <Clock className="h-4 w-4" />
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              <Clock className="h-4 w-4 flex-shrink-0" />
                               <span>{step.duration}</span>
                             </div>
                           )}
                           {step.isRefrigeration && (
-                            <div className="flex items-center gap-1.5">
-                              <Thermometer className="h-4 w-4 text-blue-500" />
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              <Thermometer className="h-4 w-4 text-blue-500 flex-shrink-0" />
                               <span>Refrigeration Step</span>
                             </div>
                           )}
                         </div>
-                        <p className="text-sm text-foreground pt-1">{step.description}</p>
+                        <p className="text-sm text-foreground pt-1 break-words">{step.description}</p>
                         {step.tips && step.tips.length > 0 && (
                           <div className="mt-3 space-y-1.5">
                             {step.tips.map((tip, tipIndex) => (
                               <div key={tipIndex} className="flex items-start gap-2 text-sm text-muted-foreground">
                                 <LightbulbIcon className="h-4 w-4 mt-0.5 text-yellow-500 flex-shrink-0" />
-                                <span>{tip}</span>
+                                <span className="break-words">{tip}</span>
                               </div>
                             ))}
                           </div>
@@ -1827,6 +1832,10 @@ export function DoughCalculator() {
                         <TabsTrigger value="salt" className="text-xs flex-shrink-0">
                           <CircleDot className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Salt</span>
+                        </TabsTrigger>
+                        <TabsTrigger value="oil" className="text-xs flex-shrink-0">
+                          <Droplet className="h-4 w-4 sm:mr-2" />
+                          <span className="hidden sm:inline">Oil</span>
                         </TabsTrigger>
                         <TabsTrigger value="yeast" className="text-xs flex-shrink-0">
                           <Beaker className="h-4 w-4 sm:mr-2" />
@@ -1959,6 +1968,47 @@ export function DoughCalculator() {
                               </h3>
                               <div className="space-y-2">
                                 {recipeResult.detailedAnalysis.saltAnalysis.impact.map((impact, index) => (
+                                  <div key={index} className="flex items-start gap-2 text-muted-foreground">
+                                    <span className="text-primary">•</span>
+                                    <span>{impact}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </TabsContent>
+
+                      <TabsContent value="oil" className="space-y-4">
+                        <div className="space-y-4">
+                          <div className="p-4 bg-muted/30 rounded-lg">
+                            <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                              <Droplet className="h-5 w-5" />
+                              Oil Content
+                            </h3>
+                            <p className="text-2xl font-bold mb-2">
+                              {recipeResult.detailedAnalysis?.oilAnalysis?.percentage || oil}%
+                            </p>
+                          </div>
+                          
+                          {recipeResult.detailedAnalysis?.oilAnalysis?.rationale && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <LightbulbIcon className="h-5 w-5" />
+                                Oil Analysis
+                              </h3>
+                              <p className="text-muted-foreground leading-relaxed">{recipeResult.detailedAnalysis.oilAnalysis.rationale}</p>
+                            </div>
+                          )}
+
+                          {recipeResult.detailedAnalysis?.oilAnalysis?.impact && recipeResult.detailedAnalysis.oilAnalysis.impact.length > 0 && (
+                            <div className="p-4 bg-muted/30 rounded-lg">
+                              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                <ChefHat className="h-5 w-5" />
+                                Impact on Dough
+                              </h3>
+                              <div className="space-y-2">
+                                {recipeResult.detailedAnalysis.oilAnalysis.impact.map((impact, index) => (
                                   <div key={index} className="flex items-start gap-2 text-muted-foreground">
                                     <span className="text-primary">•</span>
                                     <span>{impact}</span>

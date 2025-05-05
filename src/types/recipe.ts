@@ -71,6 +71,11 @@ export interface DetailedAnalysis {
   flourAnalysis?: FlourAnalysis;
   hydrationAnalysis?: HydrationAnalysis;
   saltAnalysis?: SaltAnalysis;
+  oilAnalysis?: {
+    percentage: number;
+    rationale: string;
+    impact: string[];
+  };
   yeastAnalysis?: YeastAnalysis;
   temperatureAnalysis?: TemperatureAnalysis;
   fermentationAnalysis?: FermentationAnalysis;

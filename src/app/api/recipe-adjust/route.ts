@@ -131,25 +131,30 @@ interface FlourInfo {
 
 interface DetailedAnalysis {
   flourAnalysis?: {
-        rationale: string;
+    rationale: string;
     flours: FlourInfo[];
-        alternatives?: string[];
-    };
+    alternatives?: string[];
+  };
   hydrationAnalysis?: {
-        percentage: number;
-        rationale: string;
-        impact: string[];
-    };
+    percentage: number;
+    rationale: string;
+    impact: string[];
+  };
   saltAnalysis?: {
-        percentage: number;
-        rationale: string;
-        impact: string[];
-    };
+    percentage: number;
+    rationale: string;
+    impact: string[];
+  };
+  oilAnalysis?: {
+    percentage: number;
+    rationale: string;
+    impact: string[];
+  };
   yeastAnalysis?: {
     type: string;
-        percentage: number;
-        rationale: string;
-        impact: string[];
+    percentage: number;
+    rationale: string;
+    impact: string[];
     temperatureNotes?: string[];
   };
   temperatureAnalysis?: TemperatureAnalysis;
@@ -350,6 +355,11 @@ CRITICAL TEMPERATURE INSTRUCTIONS:
       "rationale": string,
       "impact": [string]
     },
+    "oilAnalysis": {
+      "percentage": number,
+      "rationale": string,
+      "impact": [string]
+    },
     "yeastAnalysis": {
       "type": string,
       "percentage": number,
@@ -451,6 +461,11 @@ Instructions:
      * Explain why ${data.recipe.salt}% salt is appropriate (or suggest adjustments)
      * Include at least 3 specific impacts on flavor and fermentation
      * Provide tips on salt incorporation
+     
+   - oilAnalysis:
+     * Explain why ${data.recipe.oil}% oil is appropriate (or suggest adjustments)
+     * Include at least 3 specific impacts on dough characteristics
+     * Provide tips on oil incorporation
      
    - yeastAnalysis:
      * Recommend specific percentage based on fermentation time and temperature
@@ -767,6 +782,14 @@ function sanitizeResponse(parsed: any, data: RecipeInput): any {
   } else {
     da.saltAnalysis.impact = Array.isArray(da.saltAnalysis.impact) ? da.saltAnalysis.impact : [];
     da.saltAnalysis.rationale = da.saltAnalysis.rationale || "";
+  }
+  
+  // Initialize oilAnalysis
+  if (!da.oilAnalysis) {
+    da.oilAnalysis = { percentage: 0, rationale: "", impact: [] };
+  } else {
+    da.oilAnalysis.impact = Array.isArray(da.oilAnalysis.impact) ? da.oilAnalysis.impact : [];
+    da.oilAnalysis.rationale = da.oilAnalysis.rationale || "";
   }
   
   // Initialize yeastAnalysis
@@ -1099,6 +1122,15 @@ function generateFallbackResponse(data: RecipeInput): any {
           "Salt strengthens gluten structure",
           "Salt regulates yeast activity",
           "Salt enhances overall flavor"
+        ]
+      },
+      oilAnalysis: {
+        percentage: data.recipe.oil || 0,
+        rationale: `${data.recipe.oil}% oil provides a good balance of workability and flavor for ${data.style} style.`,
+        impact: [
+          `${data.recipe.oil}% oil creates a moderately open crumb structure`,
+          "Higher oil content requires more skill to handle",
+          "Lower oil content creates a denser, less airy crust"
         ]
       },
       yeastAnalysis: {
